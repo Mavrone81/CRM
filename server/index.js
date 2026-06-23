@@ -19,7 +19,7 @@ const LEADS_PATH = join(__dirname, 'data', 'leads.json');
 // ── AI classifier (Claude) ─────────────────────────────────────────────────────
 // Falls back to keyword matching when ANTHROPIC_API_KEY is not set.
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
-const AI_MODEL = 'claude-opus-4-8';
+const AI_MODEL = 'claude-haiku-4-5';
 
 const CLASSIFY_SCHEMA = {
   type: 'object',
