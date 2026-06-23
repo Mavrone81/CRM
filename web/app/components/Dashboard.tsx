@@ -236,17 +236,21 @@ export default function Dashboard() {
             <div className="flex flex-col gap-2">
               <button
                 onClick={sendBulk}
-                disabled={bulkSending || status.state !== 'open' || selected.size > 40}
+                disabled={bulkSending || status.state !== 'open'}
                 className="bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-2.5 text-sm transition-colors"
               >
                 {bulkSending ? 'Sending…' : `Send to ${selected.size} selected`}
               </button>
-              {selected.size > 40 && (
-                <p className="text-xs text-red-400 text-center">Max 40 per batch.<br/>Deselect some to continue.</p>
-              )}
-              {selected.size <= 40 && (
-                <p className="text-xs text-gray-500 text-center">~{Math.round(selected.size * 11 / 60)} min · 8–15s between each</p>
-              )}
+              <p className="text-xs text-gray-500 text-center">
+                {(() => {
+                  const n = selected.size;
+                  const batches = Math.ceil(n / 40);
+                  const msgMins = Math.round(n * 11.5 / 60);
+                  const pauseMins = (batches - 1) * 0.5;
+                  const total = msgMins + pauseMins;
+                  return `~${total} min · ${batches} batch${batches > 1 ? `es · 30s pause between` : ''}`;
+                })()}
+              </p>
             </div>
           )}
         </aside>

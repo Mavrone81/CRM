@@ -633,8 +633,8 @@
     "phone": "6597637161",
     "created": "2026-05-04T02:52:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:01:28.262Z",
     "replies": []
   },
   {
@@ -644,8 +644,8 @@
     "phone": "6586668459",
     "created": "2026-05-03T23:54:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:01:37.871Z",
     "replies": []
   },
   {
@@ -655,8 +655,8 @@
     "phone": "6597686631",
     "created": "2026-05-03T22:16:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:01:48.952Z",
     "replies": []
   },
   {
@@ -666,8 +666,8 @@
     "phone": "6584983341",
     "created": "2026-05-03T20:38:00",
     "notes": "pending",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:02:01.567Z",
     "replies": []
   },
   {
@@ -677,8 +677,8 @@
     "phone": "6594899717",
     "created": "2026-05-03T19:55:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:02:10.236Z",
     "replies": []
   },
   {
@@ -688,8 +688,8 @@
     "phone": "6591320576",
     "created": "2026-05-03T16:13:00",
     "notes": "pending",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:02:22.126Z",
     "replies": []
   },
   {
@@ -699,8 +699,8 @@
     "phone": "6587685469",
     "created": "2026-05-03T07:43:00",
     "notes": "on",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:02:31.689Z",
     "replies": []
   },
   {
@@ -710,8 +710,8 @@
     "phone": "6588895600",
     "created": "2026-05-03T06:34:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:02:42.586Z",
     "replies": []
   },
   {
@@ -721,8 +721,8 @@
     "phone": "6590181696",
     "created": "2026-05-03T06:02:00",
     "notes": "pending",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:02:52.301Z",
     "replies": []
   },
   {
@@ -732,8 +732,8 @@
     "phone": "6588339848",
     "created": "2026-05-02T20:17:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:03:01.915Z",
     "replies": []
   },
   {
@@ -743,8 +743,8 @@
     "phone": "6584215499",
     "created": "2026-05-02T18:17:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:03:14.916Z",
     "replies": []
   },
   {
@@ -754,8 +754,8 @@
     "phone": "6598182217",
     "created": "2026-05-02T18:09:00",
     "notes": "on",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:03:25.723Z",
     "replies": []
   },
   {
@@ -765,8 +765,8 @@
     "phone": "6582330964",
     "created": "2026-05-02T14:05:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:03:39.475Z",
     "replies": []
   },
   {
@@ -776,8 +776,8 @@
     "phone": "98583983",
     "created": "2026-05-02T10:40:00",
     "notes": "on",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:03:53.095Z",
     "replies": []
   },
   {
@@ -787,8 +787,8 @@
     "phone": "6596331552",
     "created": "2026-05-02T08:49:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:04:05.279Z",
     "replies": []
   },
   {
@@ -798,8 +798,8 @@
     "phone": "6585335295",
     "created": "2026-05-02T04:25:00",
     "notes": "only weekends",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:04:20.548Z",
     "replies": []
   },
   {
@@ -809,8 +809,8 @@
     "phone": "6594249887",
     "created": "2026-05-02T00:26:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:04:28.894Z",
     "replies": []
   },
   {
@@ -820,8 +820,8 @@
     "phone": "6590678962",
     "created": "2026-05-01T23:29:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:04:38.432Z",
     "replies": []
   },
   {
@@ -831,8 +831,8 @@
     "phone": "6591770846",
     "created": "2026-05-01T22:35:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:04:49.463Z",
     "replies": []
   },
   {
@@ -842,8 +842,8 @@
     "phone": "6590918909",
     "created": "2026-05-01T19:47:00",
     "notes": "on",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:05:00.469Z",
     "replies": []
   },
   {
@@ -853,8 +853,8 @@
     "phone": "92736191",
     "created": "2026-05-01T19:33:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:05:09.392Z",
     "replies": []
   },
   {
@@ -864,8 +864,8 @@
     "phone": "6596557623",
     "created": "2026-05-01T19:08:00",
     "notes": "on",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:05:18.249Z",
     "replies": []
   },
   {
@@ -875,8 +875,8 @@
     "phone": "6581277721",
     "created": "2026-05-01T18:54:00",
     "notes": "on",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:05:28.242Z",
     "replies": []
   },
   {
@@ -886,8 +886,8 @@
     "phone": "6582113561",
     "created": "2026-05-01T14:14:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:05:36.842Z",
     "replies": []
   },
   {
@@ -897,8 +897,8 @@
     "phone": "6582189913",
     "created": "2026-05-01T07:50:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:05:45.275Z",
     "replies": []
   },
   {
@@ -908,8 +908,8 @@
     "phone": "6590999777",
     "created": "2026-05-01T03:56:00",
     "notes": "on",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:05:55.531Z",
     "replies": []
   },
   {
@@ -919,8 +919,8 @@
     "phone": "6588978797",
     "created": "2026-05-01T00:46:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:06:07.725Z",
     "replies": []
   },
   {
@@ -930,8 +930,8 @@
     "phone": "65888915316",
     "created": "2026-05-01T00:44:00",
     "notes": "",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:06:19.845Z",
     "replies": []
   },
   {
@@ -941,8 +941,8 @@
     "phone": "6598734332",
     "created": "2026-05-01T00:05:00",
     "notes": "irritating fella",
-    "sent": false,
-    "sentAt": null,
+    "sent": true,
+    "sentAt": "2026-06-23T14:06:30.939Z",
     "replies": []
   },
   {

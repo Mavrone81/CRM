@@ -158,7 +158,9 @@ app.patch('/api/leads/:id', (req, res) => {
 });
 
 // Bulk send — must be registered BEFORE /api/send/:id to avoid route shadowing
-const BATCH_LIMIT = 40; // max per session to stay under WA radar
+const BATCH_SIZE = 40;
+const BATCH_PAUSE = 30000; // 30s between batches
+
 app.post('/api/send/bulk', async (req, res) => {
   if (connectionState !== 'open') {
     return res.status(503).json({ error: 'WhatsApp not connected' });
@@ -167,32 +169,45 @@ app.post('/api/send/bulk', async (req, res) => {
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ error: 'provide ids array' });
   }
-  if (ids.length > BATCH_LIMIT) {
-    return res.status(400).json({ error: `Max ${BATCH_LIMIT} per batch to avoid WA restrictions. Split into smaller groups.` });
-  }
 
   const leads = readLeads();
   const results = [];
 
-  for (const id of ids) {
-    const lead = leads.find((l) => l.id === id);
-    if (!lead) { results.push({ id, ok: false, error: 'not found' }); continue; }
+  // Split into chunks of 40
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+    chunks.push(ids.slice(i, i + BATCH_SIZE));
+  }
 
-    const jid = toJid(lead.phone);
-    if (!jid) { results.push({ id, ok: false, error: 'invalid phone' }); continue; }
+  for (let c = 0; c < chunks.length; c++) {
+    const chunk = chunks[c];
 
-    const message = customMessage || buildMessage(lead.name);
+    for (const id of chunk) {
+      const lead = leads.find((l) => l.id === id);
+      if (!lead) { results.push({ id, ok: false, error: 'not found' }); continue; }
 
-    try {
-      await sock.sendMessage(jid, { text: message });
-      lead.sent = true;
-      lead.sentAt = new Date().toISOString();
-      results.push({ id, ok: true });
-      // Random 8–15s delay between messages to mimic human behaviour
-      const delay = 8000 + Math.floor(Math.random() * 7000);
-      await new Promise((r) => setTimeout(r, delay));
-    } catch (err) {
-      results.push({ id, ok: false, error: err.message });
+      const jid = toJid(lead.phone);
+      if (!jid) { results.push({ id, ok: false, error: 'invalid phone' }); continue; }
+
+      const message = customMessage || buildMessage(lead.name);
+
+      try {
+        await sock.sendMessage(jid, { text: message });
+        lead.sent = true;
+        lead.sentAt = new Date().toISOString();
+        results.push({ id, ok: true });
+        // Random 8–15s delay between messages to mimic human behaviour
+        const delay = 8000 + Math.floor(Math.random() * 7000);
+        await new Promise((r) => setTimeout(r, delay));
+      } catch (err) {
+        results.push({ id, ok: false, error: err.message });
+      }
+    }
+
+    // 30s pause between batches (skip after last batch)
+    if (c < chunks.length - 1) {
+      console.log(`[bulk] Batch ${c + 1}/${chunks.length} done — pausing 30s`);
+      await new Promise((r) => setTimeout(r, BATCH_PAUSE));
     }
   }
 
