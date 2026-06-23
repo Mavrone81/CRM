@@ -142,8 +142,21 @@ async function connectWA() {
     if (type !== 'notify') return;
     for (const msg of messages) {
       if (msg.key.fromMe || !msg.message) continue;
-      const senderJid = msg.key.remoteJid || '';
-      const senderPhone = senderJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
+
+      // WhatsApp Business / privacy routes senders via @lid identifiers, not
+      // phone@s.whatsapp.net. Collect every JID the message exposes and pull
+      // the real phone number from whichever one carries it.
+      const jids = [
+        msg.key.remoteJid,
+        msg.key.remoteJidAlt,   // PN counterpart of an @lid chat (newer Baileys)
+        msg.key.participant,
+        msg.key.participantAlt,
+        msg.key.senderPn,
+      ].filter(Boolean);
+      const phoneJid = jids.find((j) => j.includes('@s.whatsapp.net'));
+      const senderPhone = (phoneJid || '').replace('@s.whatsapp.net', '');
+      const senderDigits = senderPhone.replace(/\D/g, '');
+
       const text =
         msg.message.conversation ||
         msg.message.extendedTextMessage?.text ||
@@ -151,8 +164,19 @@ async function connectWA() {
         '[media]';
 
       const leads = readLeads();
-      const lead = leads.find((l) => normalisePhone(l.phone) === senderPhone);
-      if (!lead) continue;
+      // Match on full normalised number, with a last-8-digits fallback so a
+      // missing/extra country code still resolves to the right lead.
+      const lead = leads.find((l) => {
+        const norm = normalisePhone(l.phone) || '';
+        if (senderPhone && norm === senderPhone) return true;
+        const leadDigits = (l.phone || '').replace(/\D/g, '');
+        return senderDigits.length >= 8 && leadDigits.length >= 8 &&
+          senderDigits.slice(-8) === leadDigits.slice(-8);
+      });
+      if (!lead) {
+        console.log(`[reply] unmatched incoming — jids=${JSON.stringify(jids)} text="${text.slice(0, 40)}"`);
+        continue;
+      }
 
       if (!lead.replies) lead.replies = [];
       lead.replies.push({ text, timestamp: new Date().toISOString() });
