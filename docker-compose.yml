@@ -1,0 +1,23 @@
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "10001:10001"
+    volumes:
+      - ./server/data:/app/data
+      - ./server/sessions:/app/sessions
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      - "10000:10000"
+    environment:
+      - WA_SERVER_URL=http://server:10001
+    depends_on:
+      - server
+    restart: unless-stopped
