@@ -3,19 +3,22 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    ports:
-      - "10001:10001"
+    # No host port published — the web service reaches it over the compose
+    # network at http://server:10001. Keeps the WA server off the public host.
+    env_file:
+      - .env
     volumes:
-      - ./server/data:/app/data
-      - ./server/sessions:/app/sessions
+      - ./server/data:/app/data       # leads.json — server-managed, bind-mounted
+      - ./server/sessions:/app/sessions  # WhatsApp link session — persists across rebuilds
     restart: unless-stopped
 
   web:
     build:
       context: ./web
       dockerfile: Dockerfile
+    # Bound to localhost only; nginx terminates TLS for crm.urbanwerkzsg.com
     ports:
-      - "10000:10000"
+      - "127.0.0.1:10000:10000"
     environment:
       - WA_SERVER_URL=http://server:10001
     depends_on:

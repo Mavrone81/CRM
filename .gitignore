@@ -1,6 +1,13 @@
 node_modules/
 .next/
+
+# WhatsApp link session — host-specific, never commit
 server/sessions/
-*.log
+
+# Live CRM data — server-managed, bind-mounted, seeded once (see leads.example.json)
+server/data/leads.json
+
+# Secrets
 .env
 .env.local
+*.log
