@@ -157,33 +157,7 @@ app.patch('/api/leads/:id', (req, res) => {
   res.json(lead);
 });
 
-// Send to one lead
-app.post('/api/send/:id', async (req, res) => {
-  if (connectionState !== 'open') {
-    return res.status(503).json({ error: 'WhatsApp not connected' });
-  }
-  const leads = readLeads();
-  const lead = leads.find((l) => l.id === Number(req.params.id));
-  if (!lead) return res.status(404).json({ error: 'not found' });
-
-  const jid = toJid(lead.phone);
-  if (!jid) return res.status(400).json({ error: 'invalid phone number' });
-
-  const message = req.body.message || buildMessage(lead.name);
-
-  try {
-    await sock.sendMessage(jid, { text: message });
-    lead.sent = true;
-    lead.sentAt = new Date().toISOString();
-    saveLeads(leads);
-    res.json({ ok: true, lead });
-  } catch (err) {
-    console.error('[send]', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Bulk send
+// Bulk send — must be registered BEFORE /api/send/:id to avoid route shadowing
 app.post('/api/send/bulk', async (req, res) => {
   if (connectionState !== 'open') {
     return res.status(503).json({ error: 'WhatsApp not connected' });
@@ -210,7 +184,6 @@ app.post('/api/send/bulk', async (req, res) => {
       lead.sent = true;
       lead.sentAt = new Date().toISOString();
       results.push({ id, ok: true });
-      // polite delay between sends
       await new Promise((r) => setTimeout(r, 1500));
     } catch (err) {
       results.push({ id, ok: false, error: err.message });
@@ -219,6 +192,32 @@ app.post('/api/send/bulk', async (req, res) => {
 
   saveLeads(leads);
   res.json({ results });
+});
+
+// Send to one lead
+app.post('/api/send/:id', async (req, res) => {
+  if (connectionState !== 'open') {
+    return res.status(503).json({ error: 'WhatsApp not connected' });
+  }
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+
+  const jid = toJid(lead.phone);
+  if (!jid) return res.status(400).json({ error: 'invalid phone number' });
+
+  const message = req.body.message || buildMessage(lead.name);
+
+  try {
+    await sock.sendMessage(jid, { text: message });
+    lead.sent = true;
+    lead.sentAt = new Date().toISOString();
+    saveLeads(leads);
+    res.json({ ok: true, lead });
+  } catch (err) {
+    console.error('[send]', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Logout (delete session)
