@@ -42,6 +42,8 @@ export default function Dashboard() {
   const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', notes: '', adviser: '' });
   const [addSaving, setAddSaving] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [view, setView] = useState<'leads' | 'replies'>('leads');
+  const [replyFilter, setReplyFilter] = useState<'all' | 'interested' | 'not' | 'other'>('all');
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -67,9 +69,37 @@ export default function Dashboard() {
   useEffect(() => {
     fetchLeads();
     fetchStatus();
-    const iv = setInterval(fetchStatus, 4000);
+    const iv = setInterval(() => {
+      fetchStatus();
+      fetchLeads(); // poll leads so new replies appear live
+    }, 4000);
     return () => clearInterval(iv);
   }, [fetchLeads, fetchStatus]);
+
+  // Classify a reply by its text content
+  const classifyReply = (text: string): 'interested' | 'not' | 'other' => {
+    const t = text.toLowerCase();
+    if (/\b(not interested|no thanks|no thank|stop|unsubscribe|remove me|don'?t|leave me)\b/.test(t)) return 'not';
+    if (/\b(interested|yes|yep|yeah|sure|ok|okay|keen|tell me|more info|details|how|sounds good|i'?m in)\b/.test(t)) return 'interested';
+    if (/^\s*no\s*$/.test(t)) return 'not';
+    return 'other';
+  };
+
+  // Leads that have at least one reply, newest reply first
+  const repliedLeads = leads
+    .filter((l) => l.replies?.length > 0)
+    .map((l) => {
+      const last = l.replies[l.replies.length - 1];
+      return { lead: l, last, category: classifyReply(last.text) };
+    })
+    .sort((a, b) => new Date(b.last.timestamp).getTime() - new Date(a.last.timestamp).getTime());
+
+  const replyCount = repliedLeads.length;
+  const interestedCount = repliedLeads.filter((r) => r.category === 'interested').length;
+
+  const visibleReplies = repliedLeads.filter(
+    (r) => replyFilter === 'all' || r.category === replyFilter
+  );
 
   const visible = leads.filter((l) => {
     const matchSearch =
@@ -180,9 +210,34 @@ export default function Dashboard() {
     <div className="flex flex-col min-h-screen">
       {/* Header */}
       <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           <span className="text-2xl font-bold text-green-400">Watapp</span>
           <span className="text-gray-500 text-sm">{leads.length} leads · {sentCount} sent</span>
+
+          {/* View toggle */}
+          <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 ml-2">
+            <button
+              onClick={() => setView('leads')}
+              className={`px-3 py-1 rounded text-sm transition-colors ${
+                view === 'leads' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Leads
+            </button>
+            <button
+              onClick={() => setView('replies')}
+              className={`px-3 py-1 rounded text-sm transition-colors inline-flex items-center gap-1.5 ${
+                view === 'replies' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Replies
+              {replyCount > 0 && (
+                <span className="bg-blue-600 text-white text-xs px-1.5 py-0.5 rounded-full min-w-5 text-center">
+                  {replyCount}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
 
         {/* WA Status */}
@@ -257,6 +312,91 @@ export default function Dashboard() {
 
         {/* Main */}
         <main className="flex-1 flex flex-col overflow-hidden">
+          {view === 'replies' ? (
+          <>
+            {/* Replies toolbar */}
+            <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-4">
+              <h2 className="text-lg font-semibold text-gray-100">Replies Inbox</h2>
+              <span className="text-sm text-gray-500">{interestedCount} interested · {replyCount} total</span>
+              <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 ml-auto">
+                {([
+                  { key: 'all', label: 'All' },
+                  { key: 'interested', label: 'Interested' },
+                  { key: 'not', label: 'Not interested' },
+                  { key: 'other', label: 'Other' },
+                ] as const).map((f) => (
+                  <button
+                    key={f.key}
+                    onClick={() => setReplyFilter(f.key)}
+                    className={`px-3 py-1 rounded text-sm transition-colors ${
+                      replyFilter === f.key ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Replies list */}
+            <div className="flex-1 overflow-auto p-6 flex flex-col gap-3">
+              {visibleReplies.length === 0 && (
+                <div className="text-center text-gray-600 py-16">
+                  {replyCount === 0 ? 'No replies yet. They appear here automatically when leads respond.' : 'No replies in this category.'}
+                </div>
+              )}
+              {visibleReplies.map(({ lead, last, category }) => (
+                <div
+                  key={lead.id}
+                  className={`rounded-xl border p-4 ${
+                    category === 'interested'
+                      ? 'border-green-700/60 bg-green-950/20'
+                      : category === 'not'
+                      ? 'border-red-800/50 bg-red-950/10'
+                      : 'border-gray-700 bg-gray-900/40'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-medium text-gray-100">{lead.name}</span>
+                        <span className="text-xs text-gray-500 font-mono">{lead.phone}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${
+                          category === 'interested'
+                            ? 'bg-green-900 text-green-300'
+                            : category === 'not'
+                            ? 'bg-red-900 text-red-300'
+                            : 'bg-gray-800 text-gray-400'
+                        }`}>
+                          {category === 'interested' ? '✓ Interested' : category === 'not' ? '✕ Not interested' : 'Other'}
+                        </span>
+                      </div>
+                      <div className="flex flex-col gap-1.5 mt-2">
+                        {lead.replies.map((r, i) => (
+                          <div key={i} className="flex items-start gap-2 text-sm">
+                            <span className="text-gray-200 bg-gray-800 rounded-lg px-3 py-1.5 inline-block">{r.text}</span>
+                            <span className="text-xs text-gray-600 mt-2 whitespace-nowrap">
+                              {new Date(r.timestamp).toLocaleString('en-SG', { dateStyle: 'short', timeStyle: 'short' })}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <a
+                      href={`https://wa.me/${lead.phone.replace(/\D/g, '').length === 8 ? '65' + lead.phone.replace(/\D/g, '') : lead.phone.replace(/\D/g, '')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
+                    >
+                      Open chat
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
+          ) : (
+          <>
           {/* Toolbar */}
           <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-4">
             <input
@@ -407,6 +547,8 @@ export default function Dashboard() {
               </tbody>
             </table>
           </div>
+          </>
+          )}
         </main>
       </div>
 
