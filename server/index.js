@@ -158,6 +158,7 @@ app.patch('/api/leads/:id', (req, res) => {
 });
 
 // Bulk send — must be registered BEFORE /api/send/:id to avoid route shadowing
+const BATCH_LIMIT = 40; // max per session to stay under WA radar
 app.post('/api/send/bulk', async (req, res) => {
   if (connectionState !== 'open') {
     return res.status(503).json({ error: 'WhatsApp not connected' });
@@ -165,6 +166,9 @@ app.post('/api/send/bulk', async (req, res) => {
   const { ids, message: customMessage } = req.body;
   if (!Array.isArray(ids) || ids.length === 0) {
     return res.status(400).json({ error: 'provide ids array' });
+  }
+  if (ids.length > BATCH_LIMIT) {
+    return res.status(400).json({ error: `Max ${BATCH_LIMIT} per batch to avoid WA restrictions. Split into smaller groups.` });
   }
 
   const leads = readLeads();
@@ -184,7 +188,9 @@ app.post('/api/send/bulk', async (req, res) => {
       lead.sent = true;
       lead.sentAt = new Date().toISOString();
       results.push({ id, ok: true });
-      await new Promise((r) => setTimeout(r, 1500));
+      // Random 8–15s delay between messages to mimic human behaviour
+      const delay = 8000 + Math.floor(Math.random() * 7000);
+      await new Promise((r) => setTimeout(r, delay));
     } catch (err) {
       results.push({ id, ok: false, error: err.message });
     }
