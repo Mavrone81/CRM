@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 
 type Reply = { text: string; timestamp: string };
 
@@ -309,8 +309,8 @@ export default function Dashboard() {
               </thead>
               <tbody className="divide-y divide-gray-900">
                 {visible.map((lead) => (
+                  <React.Fragment key={lead.id}>
                   <tr
-                    key={lead.id}
                     className={`transition-colors ${
                       selected.has(lead.id) ? 'bg-green-950/20' : 'hover:bg-gray-900/50'
                     }`}
@@ -383,6 +383,7 @@ export default function Dashboard() {
                       </td>
                     </tr>
                   )}
+                  </React.Fragment>
                 ))}
                 {visible.length === 0 && (
                   <tr>
