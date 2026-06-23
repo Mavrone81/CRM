@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from 'react';
 
+type Reply = { text: string; timestamp: string };
+
 type Lead = {
   id: number;
   name: string;
@@ -9,8 +11,10 @@ type Lead = {
   phone: string;
   created: string;
   notes: string;
+  adviser: string;
   sent: boolean;
   sentAt: string | null;
+  replies: Reply[];
 };
 
 type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null };
@@ -35,8 +39,9 @@ export default function Dashboard() {
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [hideNo, setHideNo] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', notes: '' });
+  const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', notes: '', adviser: '' });
   const [addSaving, setAddSaving] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -297,6 +302,7 @@ export default function Dashboard() {
                   <th className="px-4 py-3 text-left text-gray-400 font-medium">Name</th>
                   <th className="px-4 py-3 text-left text-gray-400 font-medium">Phone</th>
                   <th className="px-4 py-3 text-left text-gray-400 font-medium">Notes</th>
+                  <th className="px-4 py-3 text-left text-gray-400 font-medium">Replies</th>
                   <th className="px-4 py-3 text-left text-gray-400 font-medium">Status</th>
                   <th className="px-4 py-3 text-right text-gray-400 font-medium">Action</th>
                 </tr>
@@ -329,6 +335,18 @@ export default function Dashboard() {
                       )}
                     </td>
                     <td className="px-4 py-3">
+                      {lead.replies?.length > 0 ? (
+                        <button
+                          onClick={() => setExpandedId(expandedId === lead.id ? null : lead.id)}
+                          className="inline-flex items-center gap-1.5 text-xs bg-blue-900/60 border border-blue-700 text-blue-300 px-2 py-0.5 rounded-full hover:bg-blue-800/60 transition-colors"
+                        >
+                          <span>💬</span> {lead.replies.length} {lead.replies.length === 1 ? 'reply' : 'replies'}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-700">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
                       {lead.sent ? (
                         <span className="inline-flex items-center gap-1 text-xs text-green-400">
                           <span>✓</span> Sent
@@ -349,10 +367,26 @@ export default function Dashboard() {
                       )}
                     </td>
                   </tr>
+                  {expandedId === lead.id && lead.replies?.length > 0 && (
+                    <tr className="bg-blue-950/20">
+                      <td colSpan={8} className="px-8 py-3">
+                        <div className="flex flex-col gap-2">
+                          {lead.replies.map((r, i) => (
+                            <div key={i} className="flex items-start gap-3 text-sm">
+                              <span className="text-blue-400 text-xs mt-0.5 whitespace-nowrap">
+                                {new Date(r.timestamp).toLocaleString('en-SG', { dateStyle: 'short', timeStyle: 'short' })}
+                              </span>
+                              <span className="text-gray-200">{r.text}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
                 ))}
                 {visible.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-16 text-center text-gray-600">
+                    <td colSpan={8} className="px-4 py-16 text-center text-gray-600">
                       No leads match your filter.
                     </td>
                   </tr>
@@ -373,6 +407,7 @@ export default function Dashboard() {
                 { label: 'Name *', key: 'name', placeholder: 'Full name', type: 'text' },
                 { label: 'Phone *', key: 'phone', placeholder: 'e.g. 6591234567', type: 'tel' },
                 { label: 'Email', key: 'email', placeholder: 'email@example.com', type: 'email' },
+                { label: 'Adviser Name', key: 'adviser', placeholder: 'Who referred / added this lead', type: 'text' },
                 { label: 'Notes', key: 'notes', placeholder: 'pending, on, etc.', type: 'text' },
               ].map(({ label, key, placeholder, type }) => (
                 <div key={key} className="flex flex-col gap-1">

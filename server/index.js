@@ -65,6 +65,30 @@ async function connectWA() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  // Track incoming replies
+  sock.ev.on('messages.upsert', ({ messages, type }) => {
+    if (type !== 'notify') return;
+    for (const msg of messages) {
+      if (msg.key.fromMe || !msg.message) continue;
+      const senderJid = msg.key.remoteJid || '';
+      const senderPhone = senderJid.replace('@s.whatsapp.net', '').replace('@g.us', '');
+      const text =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text ||
+        msg.message.imageMessage?.caption ||
+        '[media]';
+
+      const leads = readLeads();
+      const lead = leads.find((l) => normalisePhone(l.phone) === senderPhone);
+      if (!lead) continue;
+
+      if (!lead.replies) lead.replies = [];
+      lead.replies.push({ text, timestamp: new Date().toISOString() });
+      saveLeads(leads);
+      console.log(`[reply] ${lead.name}: ${text}`);
+    }
+  });
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -113,11 +137,11 @@ app.get('/api/leads', (_req, res) => {
 
 // Add new lead
 app.post('/api/leads', (req, res) => {
-  const { name, phone, email, notes } = req.body;
+  const { name, phone, email, notes, adviser } = req.body;
   if (!name || !phone) return res.status(400).json({ error: 'name and phone required' });
   const leads = readLeads();
   const id = leads.length ? Math.max(...leads.map((l) => l.id)) + 1 : 1;
-  const lead = { id, name, phone, email: email || '', notes: notes || '', created: new Date().toISOString(), sent: false, sentAt: null };
+  const lead = { id, name, phone, email: email || '', notes: notes || '', adviser: adviser || '', created: new Date().toISOString(), sent: false, sentAt: null, replies: [] };
   leads.unshift(lead);
   saveLeads(leads);
   res.status(201).json(lead);
