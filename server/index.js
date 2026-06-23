@@ -261,6 +261,35 @@ app.post('/api/classify/all', async (_req, res) => {
   res.json({ ok: true, classified: done });
 });
 
+// Send a free-text reply to a lead (e.g. the AI-suggested reply).
+// Does NOT touch the outreach `sent` flag — this is a follow-up message.
+app.post('/api/reply/:id', async (req, res) => {
+  if (connectionState !== 'open') {
+    return res.status(503).json({ error: 'WhatsApp not connected' });
+  }
+  const message = (req.body.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'message required' });
+
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+
+  const jid = toJid(lead.phone);
+  if (!jid) return res.status(400).json({ error: 'invalid phone number' });
+
+  try {
+    await sock.sendMessage(jid, { text: message });
+    if (!lead.sentReplies) lead.sentReplies = [];
+    lead.sentReplies.push({ text: message, timestamp: new Date().toISOString() });
+    saveLeads(leads);
+    console.log(`[reply-sent] ${lead.name}: ${message.slice(0, 50)}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[reply-sent]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Re-classify one lead's replies on demand
 app.post('/api/classify/:id', async (req, res) => {
   const leads = readLeads();

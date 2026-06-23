@@ -172,6 +172,29 @@ export default function Dashboard() {
     }
   };
 
+  const [sendingReply, setSendingReply] = useState<Set<number>>(new Set());
+
+  const sendSuggestedReply = async (lead: Lead) => {
+    const message = lead.ai?.suggested_reply?.trim();
+    if (!message) return;
+    if (status.state !== 'open') return showToast('WhatsApp not connected', false);
+    setSendingReply((p) => new Set(p).add(lead.id));
+    try {
+      const r = await fetch(`${API}/reply/${lead.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      });
+      const d = await r.json();
+      if (d.ok) showToast(`Reply sent to ${lead.name}`);
+      else showToast(d.error || 'Send failed', false);
+    } catch {
+      showToast('Network error', false);
+    } finally {
+      setSendingReply((p) => { const n = new Set(p); n.delete(lead.id); return n; });
+    }
+  };
+
   const classifyLead = async (id: number) => {
     setClassifying((p) => new Set(p).add(id));
     try {
@@ -445,6 +468,13 @@ export default function Dashboard() {
                             className="text-xs text-gray-400 hover:text-gray-200 whitespace-nowrap"
                           >
                             Copy
+                          </button>
+                          <button
+                            onClick={() => sendSuggestedReply(lead)}
+                            disabled={sendingReply.has(lead.id) || status.state !== 'open'}
+                            className="text-xs bg-green-700 hover:bg-green-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-2.5 py-1 rounded-md whitespace-nowrap"
+                          >
+                            {sendingReply.has(lead.id) ? 'Sending…' : 'Send'}
                           </button>
                         </div>
                       )}
