@@ -3,6 +3,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
 } from '@whiskeysockets/baileys';
+import { rmSync, readdirSync } from 'fs';
 import pino from 'pino';
 import express from 'express';
 import cors from 'cors';
@@ -106,14 +107,22 @@ async function connectWA() {
 
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = code !== DisconnectReason.loggedOut;
       connectionState = 'close';
       currentQR = null;
       console.log('[WA] Disconnected, code:', code);
-      if (shouldReconnect) {
-        console.log('[WA] Reconnecting…');
-        setTimeout(connectWA, 3000);
+
+      if (code === DisconnectReason.loggedOut) {
+        // Account logged out or banned — clear session so a new account can be linked
+        console.log('[WA] Session ended (logged out / restricted) — clearing session for fresh QR');
+        try {
+          const files = readdirSync(join(__dirname, 'sessions'));
+          for (const f of files) rmSync(join(__dirname, 'sessions', f), { recursive: true, force: true });
+        } catch {}
       }
+
+      // Always reconnect — will generate a fresh QR if session was cleared
+      console.log('[WA] Reconnecting in 3s…');
+      setTimeout(connectWA, 3000);
     }
   });
 }
