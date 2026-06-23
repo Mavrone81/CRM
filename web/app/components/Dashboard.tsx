@@ -4,6 +4,14 @@ import React, { useEffect, useState, useCallback } from 'react';
 
 type Reply = { text: string; timestamp: string };
 
+type AiResult = {
+  category: 'interested' | 'not_interested' | 'question' | 'other';
+  confidence: 'high' | 'medium' | 'low';
+  reason: string;
+  suggested_reply: string;
+  classifiedAt: string;
+};
+
 type Lead = {
   id: number;
   name: string;
@@ -15,9 +23,10 @@ type Lead = {
   sent: boolean;
   sentAt: string | null;
   replies: Reply[];
+  ai?: AiResult;
 };
 
-type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null };
+type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean };
 
 const DEFAULT_TEMPLATE = `Hi [Name], We connected previously regarding a business/career opportunity, but I recently switched to WhatsApp Business and lost my chat history.
 
@@ -42,8 +51,9 @@ export default function Dashboard() {
   const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', notes: '', adviser: '' });
   const [addSaving, setAddSaving] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [classifying, setClassifying] = useState<Set<number>>(new Set());
   const [view, setView] = useState<'leads' | 'replies'>('leads');
-  const [replyFilter, setReplyFilter] = useState<'all' | 'interested' | 'not' | 'other'>('all');
+  const [replyFilter, setReplyFilter] = useState<'all' | 'interested' | 'not' | 'question' | 'other'>('all');
 
   const showToast = (msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -76,21 +86,27 @@ export default function Dashboard() {
     return () => clearInterval(iv);
   }, [fetchLeads, fetchStatus]);
 
-  // Classify a reply by its text content
-  const classifyReply = (text: string): 'interested' | 'not' | 'other' => {
+  // Keyword fallback only used when the server hasn't classified yet
+  const classifyReply = (text: string): 'interested' | 'not' | 'question' | 'other' => {
     const t = text.toLowerCase();
     if (/\b(not interested|no thanks|no thank|stop|unsubscribe|remove me|don'?t|leave me)\b/.test(t)) return 'not';
     if (/\b(interested|yes|yep|yeah|sure|ok|okay|keen|tell me|more info|details|how|sounds good|i'?m in)\b/.test(t)) return 'interested';
     if (/^\s*no\s*$/.test(t)) return 'not';
+    if (/\?/.test(t)) return 'question';
     return 'other';
   };
+
+  // Map the server's AI category to the UI's category buckets
+  const aiToCategory = (c: AiResult['category']): 'interested' | 'not' | 'question' | 'other' =>
+    c === 'not_interested' ? 'not' : c;
 
   // Leads that have at least one reply, newest reply first
   const repliedLeads = leads
     .filter((l) => l.replies?.length > 0)
     .map((l) => {
       const last = l.replies[l.replies.length - 1];
-      return { lead: l, last, category: classifyReply(last.text) };
+      const category = l.ai ? aiToCategory(l.ai.category) : classifyReply(last.text);
+      return { lead: l, last, category };
     })
     .sort((a, b) => new Date(b.last.timestamp).getTime() - new Date(a.last.timestamp).getTime());
 
@@ -156,6 +172,23 @@ export default function Dashboard() {
     }
   };
 
+  const classifyLead = async (id: number) => {
+    setClassifying((p) => new Set(p).add(id));
+    try {
+      const r = await fetch(`${API}/classify/${id}`, { method: 'POST' });
+      const d = await r.json();
+      if (d.ok) {
+        setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ai: d.ai } : l)));
+      } else {
+        showToast(d.error || 'Classification failed', false);
+      }
+    } catch {
+      showToast('Network error', false);
+    } finally {
+      setClassifying((p) => { const n = new Set(p); n.delete(id); return n; });
+    }
+  };
+
   const addLead = async () => {
     if (!addForm.name.trim() || !addForm.phone.trim()) return;
     setAddSaving(true);
@@ -168,7 +201,7 @@ export default function Dashboard() {
       const d = await r.json();
       if (r.ok) {
         setLeads((prev) => [d, ...prev]);
-        setAddForm({ name: '', phone: '', email: '', notes: '' });
+        setAddForm({ name: '', phone: '', email: '', notes: '', adviser: '' });
         setShowAdd(false);
         showToast(`Added ${d.name}`);
       } else {
@@ -322,6 +355,7 @@ export default function Dashboard() {
                 {([
                   { key: 'all', label: 'All' },
                   { key: 'interested', label: 'Interested' },
+                  { key: 'question', label: 'Questions' },
                   { key: 'not', label: 'Not interested' },
                   { key: 'other', label: 'Other' },
                 ] as const).map((f) => (
@@ -345,7 +379,18 @@ export default function Dashboard() {
                   {replyCount === 0 ? 'No replies yet. They appear here automatically when leads respond.' : 'No replies in this category.'}
                 </div>
               )}
-              {visibleReplies.map(({ lead, last, category }) => (
+              {visibleReplies.map(({ lead, last, category }) => {
+                const catLabel =
+                  category === 'interested' ? '✓ Interested'
+                  : category === 'not' ? '✕ Not interested'
+                  : category === 'question' ? '? Question'
+                  : 'Other';
+                const catChip =
+                  category === 'interested' ? 'bg-green-900 text-green-300'
+                  : category === 'not' ? 'bg-red-900 text-red-300'
+                  : category === 'question' ? 'bg-yellow-900 text-yellow-300'
+                  : 'bg-gray-800 text-gray-400';
+                return (
                 <div
                   key={lead.id}
                   className={`rounded-xl border p-4 ${
@@ -353,24 +398,34 @@ export default function Dashboard() {
                       ? 'border-green-700/60 bg-green-950/20'
                       : category === 'not'
                       ? 'border-red-800/50 bg-red-950/10'
+                      : category === 'question'
+                      ? 'border-yellow-800/40 bg-yellow-950/10'
                       : 'border-gray-700 bg-gray-900/40'
                   }`}
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className="font-medium text-gray-100">{lead.name}</span>
                         <span className="text-xs text-gray-500 font-mono">{lead.phone}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          category === 'interested'
-                            ? 'bg-green-900 text-green-300'
-                            : category === 'not'
-                            ? 'bg-red-900 text-red-300'
-                            : 'bg-gray-800 text-gray-400'
-                        }`}>
-                          {category === 'interested' ? '✓ Interested' : category === 'not' ? '✕ Not interested' : 'Other'}
-                        </span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${catChip}`}>{catLabel}</span>
+                        {lead.ai ? (
+                          <span className="text-xs text-purple-300 bg-purple-950/50 border border-purple-800 px-2 py-0.5 rounded-full">
+                            AI · {lead.ai.confidence}
+                          </span>
+                        ) : (
+                          <button
+                            onClick={() => classifyLead(lead.id)}
+                            disabled={classifying.has(lead.id)}
+                            className="text-xs text-gray-400 bg-gray-800 hover:bg-gray-700 px-2 py-0.5 rounded-full disabled:opacity-50"
+                          >
+                            {classifying.has(lead.id) ? 'Analysing…' : 'Classify with AI'}
+                          </button>
+                        )}
                       </div>
+                      {lead.ai?.reason && (
+                        <p className="text-xs text-gray-400 mb-2 italic">{lead.ai.reason}</p>
+                      )}
                       <div className="flex flex-col gap-1.5 mt-2">
                         {lead.replies.map((r, i) => (
                           <div key={i} className="flex items-start gap-2 text-sm">
@@ -381,18 +436,42 @@ export default function Dashboard() {
                           </div>
                         ))}
                       </div>
+                      {lead.ai?.suggested_reply && (
+                        <div className="mt-3 flex items-start gap-2 bg-gray-950/60 border border-gray-800 rounded-lg p-2.5">
+                          <span className="text-xs text-purple-300 mt-0.5 whitespace-nowrap">Suggested:</span>
+                          <span className="text-sm text-gray-300 flex-1">{lead.ai.suggested_reply}</span>
+                          <button
+                            onClick={() => { navigator.clipboard.writeText(lead.ai!.suggested_reply); showToast('Reply copied'); }}
+                            className="text-xs text-gray-400 hover:text-gray-200 whitespace-nowrap"
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      )}
                     </div>
-                    <a
-                      href={`https://wa.me/${lead.phone.replace(/\D/g, '').length === 8 ? '65' + lead.phone.replace(/\D/g, '') : lead.phone.replace(/\D/g, '')}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap"
-                    >
-                      Open chat
-                    </a>
+                    <div className="flex flex-col gap-2">
+                      <a
+                        href={`https://wa.me/${lead.phone.replace(/\D/g, '').length === 8 ? '65' + lead.phone.replace(/\D/g, '') : lead.phone.replace(/\D/g, '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap text-center"
+                      >
+                        Open chat
+                      </a>
+                      {lead.ai && (
+                        <button
+                          onClick={() => classifyLead(lead.id)}
+                          disabled={classifying.has(lead.id)}
+                          className="text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 px-3 py-1.5 rounded-lg disabled:opacity-50 whitespace-nowrap"
+                        >
+                          {classifying.has(lead.id) ? '…' : 'Re-run AI'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </>
           ) : (

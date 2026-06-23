@@ -8,12 +8,83 @@ import pino from 'pino';
 import express from 'express';
 import cors from 'cors';
 import qrcode from 'qrcode';
+import Anthropic from '@anthropic-ai/sdk';
 import { readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LEADS_PATH = join(__dirname, 'data', 'leads.json');
+
+// ── AI classifier (Claude) ─────────────────────────────────────────────────────
+// Falls back to keyword matching when ANTHROPIC_API_KEY is not set.
+const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
+const AI_MODEL = 'claude-opus-4-8';
+
+const CLASSIFY_SCHEMA = {
+  type: 'object',
+  properties: {
+    category: {
+      type: 'string',
+      enum: ['interested', 'not_interested', 'question', 'other'],
+      description: 'How the contact responded to the outreach message',
+    },
+    confidence: {
+      type: 'string',
+      enum: ['high', 'medium', 'low'],
+      description: 'How confident you are in the category',
+    },
+    reason: {
+      type: 'string',
+      description: 'One short sentence explaining the classification',
+    },
+    suggested_reply: {
+      type: 'string',
+      description: 'A short, friendly reply to send back to this contact',
+    },
+  },
+  required: ['category', 'confidence', 'reason', 'suggested_reply'],
+  additionalProperties: false,
+};
+
+// Keyword fallback when no API key is configured
+function classifyKeyword(text) {
+  const t = (text || '').toLowerCase();
+  if (/\b(not interested|no thanks|no thank|stop|unsubscribe|remove me|leave me)\b/.test(t) || /^\s*no\s*$/.test(t))
+    return { category: 'not_interested', confidence: 'low', reason: 'Keyword match (no API key set)', suggested_reply: 'No worries at all — thanks for letting me know. Take care!' };
+  if (/\b(interested|yes|yep|yeah|sure|ok|okay|keen|tell me|more info|details)\b/.test(t))
+    return { category: 'interested', confidence: 'low', reason: 'Keyword match (no API key set)', suggested_reply: 'Great! I\'ll send over the details shortly.' };
+  if (/\?/.test(t))
+    return { category: 'question', confidence: 'low', reason: 'Contains a question mark', suggested_reply: 'Good question — happy to explain. Let me get you the details.' };
+  return { category: 'other', confidence: 'low', reason: 'No keyword match (no API key set)', suggested_reply: '' };
+}
+
+async function classifyReplies(name, replies) {
+  const transcript = replies.map((r) => `- ${r.text}`).join('\n');
+  if (!anthropic) return classifyKeyword(replies[replies.length - 1]?.text || '');
+
+  const prompt = `You are triaging WhatsApp replies for a recruitment/business-opportunity outreach campaign. We sent this contact a message asking if they're open to hearing about opportunities or extra income, and to reply "Interested" if so.
+
+Contact name: ${name}
+Their reply/replies:
+${transcript}
+
+Classify their response and draft a short, warm reply we could send back. Be concise.`;
+
+  try {
+    const res = await anthropic.messages.create({
+      model: AI_MODEL,
+      max_tokens: 1024,
+      output_config: { format: { type: 'json_schema', schema: CLASSIFY_SCHEMA } },
+      messages: [{ role: 'user', content: prompt }],
+    });
+    const text = res.content.find((b) => b.type === 'text')?.text || '{}';
+    return JSON.parse(text);
+  } catch (err) {
+    console.error('[ai] classify failed, falling back:', err.message);
+    return classifyKeyword(replies[replies.length - 1]?.text || '');
+  }
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let sock = null;
@@ -67,7 +138,7 @@ async function connectWA() {
   sock.ev.on('creds.update', saveCreds);
 
   // Track incoming replies
-  sock.ev.on('messages.upsert', ({ messages, type }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const msg of messages) {
       if (msg.key.fromMe || !msg.message) continue;
@@ -87,6 +158,16 @@ async function connectWA() {
       lead.replies.push({ text, timestamp: new Date().toISOString() });
       saveLeads(leads);
       console.log(`[reply] ${lead.name}: ${text}`);
+
+      // Classify with AI (re-read + save to avoid stomping concurrent writes)
+      const ai = await classifyReplies(lead.name, lead.replies);
+      const fresh = readLeads();
+      const target = fresh.find((l) => l.id === lead.id);
+      if (target) {
+        target.ai = { ...ai, classifiedAt: new Date().toISOString() };
+        saveLeads(fresh);
+        console.log(`[ai] ${lead.name}: ${ai.category} (${ai.confidence})`);
+      }
     }
   });
 
@@ -136,7 +217,39 @@ app.use(express.json());
 
 // Status + QR
 app.get('/api/status', (_req, res) => {
-  res.json({ state: connectionState, qr: currentQR });
+  res.json({ state: connectionState, qr: currentQR, ai: !!anthropic });
+});
+
+// Classify all leads with replies that haven't been classified yet
+// (registered BEFORE /api/classify/:id so "all" isn't matched as an id)
+app.post('/api/classify/all', async (_req, res) => {
+  const leads = readLeads();
+  const pending = leads.filter((l) => l.replies?.length && !l.ai);
+  let done = 0;
+  for (const lead of pending) {
+    const ai = await classifyReplies(lead.name, lead.replies);
+    const fresh = readLeads();
+    const target = fresh.find((l) => l.id === lead.id);
+    target.ai = { ...ai, classifiedAt: new Date().toISOString() };
+    saveLeads(fresh);
+    done++;
+  }
+  res.json({ ok: true, classified: done });
+});
+
+// Re-classify one lead's replies on demand
+app.post('/api/classify/:id', async (req, res) => {
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  if (!lead.replies?.length) return res.status(400).json({ error: 'no replies to classify' });
+
+  const ai = await classifyReplies(lead.name, lead.replies);
+  const fresh = readLeads();
+  const target = fresh.find((l) => l.id === lead.id);
+  target.ai = { ...ai, classifiedAt: new Date().toISOString() };
+  saveLeads(fresh);
+  res.json({ ok: true, ai: target.ai });
 });
 
 // All leads
