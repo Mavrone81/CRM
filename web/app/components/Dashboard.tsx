@@ -82,7 +82,7 @@ export default function Dashboard() {
     const iv = setInterval(() => {
       fetchStatus();
       fetchLeads(); // poll leads so new replies appear live
-    }, 4000);
+    }, 2000);
     return () => clearInterval(iv);
   }, [fetchLeads, fetchStatus]);
 
