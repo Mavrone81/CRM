@@ -68,7 +68,7 @@ export default function Analytics({ leads }: { leads: Lead[] }) {
     const pct = denom > 0 ? Math.round((n / denom) * 100) : 0;
     return (
       <div className="flex items-center gap-3">
-        <span className="w-36 shrink-0 text-xs text-gray-400 text-right">{label}</span>
+        <span className="w-24 sm:w-36 shrink-0 text-xs text-gray-400 text-right">{label}</span>
         <div className="flex-1 h-6 bg-gray-900 rounded-md overflow-hidden border border-gray-800">
           <div className={`h-full ${color} transition-all`} style={{ width: `${Math.max(pct, n > 0 ? 3 : 0)}%` }} />
         </div>

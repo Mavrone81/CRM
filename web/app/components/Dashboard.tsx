@@ -303,7 +303,7 @@ export default function Dashboard() {
           <span className="text-gray-500 text-xs sm:text-sm">{leads.length} leads · {sentCount} sent</span>
 
           {/* View toggle */}
-          <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 sm:ml-2">
+          <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 sm:ml-2 max-w-full overflow-x-auto">
             <button
               onClick={() => setView('analytics')}
               className={`px-3 py-1 rounded text-sm transition-colors ${
