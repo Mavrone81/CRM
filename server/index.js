@@ -3,6 +3,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   downloadMediaMessage,
+  Browsers,
 } from '@whiskeysockets/baileys';
 import { rmSync, readdirSync, mkdirSync, existsSync, unlinkSync } from 'fs';
 import pino from 'pino';
@@ -374,7 +375,9 @@ async function connectWA() {
     auth: state,
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
-    browser: ['Watapp', 'Chrome', '1.0'],
+    // Identify as a Desktop client — WhatsApp only pushes chat-history sync to
+    // desktop-class clients, which the backfill needs.
+    browser: Browsers.macOS('Desktop'),
     markOnlineOnConnect: false,
     syncFullHistory: true, // pull chat history on link so the backfill can recover missed replies
     // Answer decryption-retry requests so recipients never get stuck on
