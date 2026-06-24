@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 
 type Reply = { text: string; timestamp: string };
 
@@ -37,6 +38,7 @@ If yes, just reply "Interested" and I'll send you the details. If not, no worrie
 const API = '/api/proxy';
 
 export default function Dashboard() {
+  const router = useRouter();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [status, setStatus] = useState<WaStatus>({ state: 'close', qr: null });
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -282,6 +284,14 @@ export default function Dashboard() {
     }
   };
 
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {}
+    router.replace('/login');
+    router.refresh();
+  };
+
   return (
     <div className="flex flex-col min-h-screen">
       {/* Header */}
@@ -345,6 +355,13 @@ export default function Dashboard() {
             }`} />
             {status.state === 'open' ? 'Connected' : status.state === 'connecting' ? 'Scan QR' : 'Disconnected'}
           </span>
+          <button
+            onClick={logout}
+            title="Sign out"
+            className="text-xs sm:text-sm font-medium px-3 py-1.5 rounded-full border bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200 transition-colors"
+          >
+            Sign out
+          </button>
         </div>
       </header>
 
