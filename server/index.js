@@ -334,6 +334,34 @@ function buildMessage(name) {
   return `Hi ${name}, We connected previously regarding a business/career opportunity, but I recently switched to WhatsApp Business and lost my chat history.\n\nI'm updating my records and wanted to check if you're still open to hearing about opportunities or additional income streams.\n\nIf yes, just reply "Interested" and I'll send you the details. If not, no worries and I won't follow up further.`;
 }
 
+// Extract the sender's real phone from a message's various JID fields (handles
+// WhatsApp Business / @lid privacy routing).
+function senderPhoneOf(msg) {
+  const jids = [msg.key?.remoteJid, msg.key?.remoteJidAlt, msg.key?.participant, msg.key?.participantAlt, msg.key?.senderPn].filter(Boolean);
+  const phoneJid = jids.find((j) => j.includes('@s.whatsapp.net'));
+  return (phoneJid || '').replace('@s.whatsapp.net', '');
+}
+
+// Match an incoming sender phone to a lead (full number, then last-8-digits fallback).
+function matchLead(leads, senderPhone) {
+  const senderDigits = (senderPhone || '').replace(/\D/g, '');
+  return leads.find((l) => {
+    const norm = normalisePhone(l.phone) || '';
+    if (senderPhone && norm === senderPhone) return true;
+    const leadDigits = (l.phone || '').replace(/\D/g, '');
+    return senderDigits.length >= 8 && leadDigits.length >= 8 && senderDigits.slice(-8) === leadDigits.slice(-8);
+  });
+}
+
+// Best-effort plain text of a WA message (document -> placeholder).
+function messageText(msg) {
+  const docMsg = msg.message?.documentMessage || msg.message?.documentWithCaptionMessage?.message?.documentMessage;
+  return msg.message?.conversation
+    || msg.message?.extendedTextMessage?.text
+    || msg.message?.imageMessage?.caption
+    || (docMsg ? `[document: ${docMsg.fileName || 'file'}]` : '[media]');
+}
+
 // ── WhatsApp ──────────────────────────────────────────────────────────────────
 async function connectWA() {
   const { state, saveCreds } = await useMultiFileAuthState(
@@ -348,12 +376,53 @@ async function connectWA() {
     printQRInTerminal: false,
     browser: ['Watapp', 'Chrome', '1.0'],
     markOnlineOnConnect: false,
+    syncFullHistory: true, // pull chat history on link so the backfill can recover missed replies
     // Answer decryption-retry requests so recipients never get stuck on
     // "Waiting for this message" — re-encrypt and resend the original.
     getMessage: async (key) => msgStore.get(key.id) || undefined,
   });
 
   sock.ev.on('creds.update', saveCreds);
+
+  // Backfill: when WhatsApp syncs chat history (e.g. after re-linking the number),
+  // capture any lead replies that arrived while the bot was offline, then classify.
+  sock.ev.on('messaging-history.set', async ({ messages }) => {
+    if (!messages?.length) return;
+    const leads = readLeads();
+    const touched = new Set();
+    for (const msg of messages) {
+      if (msg.key?.fromMe || !msg.message) continue;
+      const lead = matchLead(leads, senderPhoneOf(msg));
+      if (!lead) continue;
+      const text = messageText(msg);
+      if (text === '[media]') continue;
+      if (!lead.replies) lead.replies = [];
+      if (lead.replies.some((r) => r.text === text)) continue; // dedupe vs existing
+      const ts = msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000).toISOString() : new Date().toISOString();
+      lead.replies.push({ text, timestamp: ts, backfilled: true });
+      touched.add(lead.id);
+    }
+    if (!touched.size) return;
+    for (const id of touched) {
+      const l = leads.find((x) => x.id === id);
+      l.replies.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    }
+    saveLeads(leads);
+    console.log(`[backfill] history sync: ${touched.size} lead(s) got replies — classifying…`);
+    for (const id of touched) {
+      try {
+        const fresh = readLeads();
+        const l = fresh.find((x) => x.id === id);
+        if (!l?.replies?.length) continue;
+        const ai = await classifyReplies(l.name, l.replies);
+        l.ai = { ...ai, classifiedAt: new Date().toISOString() };
+        if (ai.category === 'interested' && !l.stage) { l.stage = 'brief'; l.wf = { ...(l.wf || {}), enteredAt: new Date().toISOString() }; }
+        saveLeads(fresh);
+        console.log(`[backfill] #${id} ${l.name}: ${ai.category}`);
+      } catch (e) { console.error('[backfill] classify failed for', id, e.message); }
+    }
+    console.log(`[backfill] done — ${touched.size} lead(s) updated`);
+  });
 
   // Track incoming replies
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
