@@ -512,8 +512,8 @@ export default function Dashboard() {
                       {!isCollapsed && (
                       <div className="flex flex-col gap-1.5 mt-2">
                         {lead.replies.map((r, i) => (
-                          <div key={i} className="flex items-start gap-2 text-sm">
-                            <span className="text-gray-200 bg-gray-800 rounded-lg px-3 py-1.5 inline-block">{r.text}</span>
+                          <div key={i} className="flex flex-wrap items-start gap-x-2 gap-y-0.5 text-sm">
+                            <span className="text-gray-200 bg-gray-800 rounded-lg px-3 py-1.5 inline-block min-w-0 break-words max-w-full">{r.text}</span>
                             <span className="text-xs text-gray-600 mt-2 whitespace-nowrap">
                               {new Date(r.timestamp).toLocaleString('en-SG', { dateStyle: 'short', timeStyle: 'short' })}
                             </span>
@@ -522,9 +522,9 @@ export default function Dashboard() {
                       </div>
                       )}
                       {!isCollapsed && lead.ai?.suggested_reply && (
-                        <div className="mt-3 flex items-start gap-2 bg-gray-950/60 border border-gray-800 rounded-lg p-2.5">
+                        <div className="mt-3 flex flex-wrap items-start gap-2 bg-gray-950/60 border border-gray-800 rounded-lg p-2.5">
                           <span className="text-xs text-purple-300 mt-0.5 whitespace-nowrap">Suggested:</span>
-                          <span className="text-sm text-gray-300 flex-1">{lead.ai.suggested_reply}</span>
+                          <span className="text-sm text-gray-300 flex-1 min-w-[60%] break-words">{lead.ai.suggested_reply}</span>
                           <button
                             onClick={() => { navigator.clipboard.writeText(lead.ai!.suggested_reply); showToast('Reply copied'); }}
                             className="text-xs text-gray-400 hover:text-gray-200 whitespace-nowrap"
