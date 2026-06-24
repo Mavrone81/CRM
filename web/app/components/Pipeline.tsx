@@ -54,6 +54,7 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
   const [inviteFor, setInviteFor] = useState<number | null>(null);
   const [inviteText, setInviteText] = useState('');
   const [settingsTab, setSettingsTab] = useState<null | 'brief' | 'sessions' | 'documents'>(null);
+  const [activeStage, setActiveStage] = useState<Stage>('brief');
 
   const loadConfig = useCallback(async () => {
     try { setConfig(await (await fetch(`${API}/config`)).json()); } catch {}
@@ -91,6 +92,7 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
     agreement_sent: leads.filter((l) => l.stage === 'agreement_sent'),
     declined: [],
   };
+  const activeCol = COLUMNS.find((c) => c.key === activeStage);
 
   const sessionLabel = (id?: string | null) => {
     const s = config?.sessions.find((x) => x.id === id);
@@ -260,23 +262,39 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
         </div>
       </div>
 
-      {/* Columns */}
+      {/* Stage tabs */}
+      <div className="px-4 sm:px-6 border-b border-gray-800 flex gap-1 overflow-x-auto">
+        {COLUMNS.map((c) => {
+          const active = activeStage === c.key;
+          return (
+            <button
+              key={c.key}
+              onClick={() => setActiveStage(c.key)}
+              className={`px-3 py-2.5 text-sm whitespace-nowrap border-b-2 -mb-px transition-colors inline-flex items-center gap-1.5 ${
+                active ? 'border-green-500 text-green-400' : 'border-transparent text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              {c.title}
+              <span className={`text-xs px-1.5 py-0.5 rounded-full ${active ? 'bg-green-900 text-green-200' : 'bg-gray-800 text-gray-500'}`}>
+                {colLeads[c.key].length}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Cards for the selected stage — one stage per page, responsive grid */}
       <div className="flex-1 overflow-auto p-4 sm:p-6">
-        <div className="flex gap-4 min-w-max">
-          {COLUMNS.map((c) => (
-            <div key={c.key} className="w-72 shrink-0 flex flex-col gap-3">
-              <div className="flex items-baseline justify-between px-1">
-                <span className="text-sm font-semibold text-gray-200">{c.title}</span>
-                <span className="text-xs text-gray-500">{colLeads[c.key].length}</span>
-              </div>
-              <p className="text-[11px] text-gray-600 px-1 -mt-2">{c.hint}</p>
-              <div className="flex flex-col gap-3">
-                {colLeads[c.key].map((l) => renderCard(l, c.key))}
-                {colLeads[c.key].length === 0 && <div className="text-xs text-gray-700 text-center py-6 border border-dashed border-gray-800 rounded-xl">empty</div>}
-              </div>
-            </div>
-          ))}
-        </div>
+        <p className="text-xs text-gray-500 mb-4">{activeCol?.hint}</p>
+        {colLeads[activeStage].length === 0 ? (
+          <div className="text-sm text-gray-700 text-center py-16 border border-dashed border-gray-800 rounded-xl">
+            No leads in {activeCol?.title}.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+            {colLeads[activeStage].map((l) => renderCard(l, activeStage))}
+          </div>
+        )}
       </div>
 
       {settingsTab && (
