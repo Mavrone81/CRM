@@ -295,6 +295,16 @@ let sock = null;
 let connectionState = 'close'; // 'close' | 'connecting' | 'open'
 let currentQR = null;           // base64 QR image
 
+// Outgoing/seen message store so we can answer decryption-retry requests. Without
+// this, recipients who can't decrypt a message (common after a reconnect) stay
+// stuck on "Waiting for this message" because Baileys can't re-send the original.
+const msgStore = new Map(); // message id -> proto message
+function rememberMessage(m) {
+  if (!m?.key?.id || !m.message) return;
+  msgStore.set(m.key.id, m.message);
+  if (msgStore.size > 3000) msgStore.delete(msgStore.keys().next().value); // bound memory
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function readLeads() {
   return JSON.parse(readFileSync(LEADS_PATH, 'utf8'));
@@ -337,12 +347,17 @@ async function connectWA() {
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     browser: ['Watapp', 'Chrome', '1.0'],
+    markOnlineOnConnect: false,
+    // Answer decryption-retry requests so recipients never get stuck on
+    // "Waiting for this message" — re-encrypt and resend the original.
+    getMessage: async (key) => msgStore.get(key.id) || undefined,
   });
 
   sock.ev.on('creds.update', saveCreds);
 
   // Track incoming replies
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    for (const m of messages) rememberMessage(m); // store ALL (incl. our sent) for retries
     if (type !== 'notify') return;
     for (const msg of messages) {
       if (msg.key.fromMe || !msg.message) continue;

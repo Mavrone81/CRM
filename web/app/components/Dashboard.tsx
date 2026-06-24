@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Pipeline from './Pipeline';
 import Analytics from './Analytics';
@@ -43,11 +43,17 @@ export default function Dashboard() {
     setTimeout(() => setToast(null), 3500);
   };
 
+  // Only push new state when the polled data actually changed, so the 2s poll
+  // doesn't re-render (and disrupt open dropdowns / mid-typing) while idle.
+  const statusSig = useRef('');
+  const leadsSig = useRef('');
+
   const fetchStatus = useCallback(async () => {
     try {
       const r = await fetch(`${API}/status`);
       const d = await r.json();
-      setStatus(d);
+      const sig = JSON.stringify(d);
+      if (sig !== statusSig.current) { statusSig.current = sig; setStatus(d); }
     } catch {}
   }, []);
 
@@ -55,7 +61,8 @@ export default function Dashboard() {
     try {
       const r = await fetch(`${API}/leads`);
       const d = await r.json();
-      setLeads(d);
+      const sig = JSON.stringify(d);
+      if (sig !== leadsSig.current) { leadsSig.current = sig; setLeads(d); }
     } catch {}
   }, []);
 
