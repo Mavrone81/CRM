@@ -33,7 +33,10 @@ const COLUMNS: { key: Stage; title: string; hint: string }[] = [
   { key: 'confirmed', title: 'Confirmed', hint: 'Assign a session' },
   { key: 'slotted', title: 'Slotted', hint: 'Take attendance' },
   { key: 'attended', title: 'Attended', hint: 'Send agreement' },
-  { key: 'agreement_sent', title: 'Agreement Sent', hint: 'Awaiting signed copy' },
+  { key: 'agreement_sent', title: 'Agreement', hint: 'Bot auto-validates the returned signed PDF' },
+  { key: 'onboarding', title: 'Onboarding', hint: 'Bot offers sessions; lead replies to pick (auto)' },
+  { key: 'onboarding_slotted', title: 'Booked', hint: 'Take onboarding-session attendance' },
+  { key: 'onboarded', title: 'On-board', hint: 'Sales Reps ✅' },
 ];
 
 // All stages a card can be manually moved to.
@@ -53,7 +56,7 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [inviteFor, setInviteFor] = useState<number | null>(null);
   const [inviteText, setInviteText] = useState('');
-  const [settingsTab, setSettingsTab] = useState<null | 'brief' | 'sessions' | 'documents'>(null);
+  const [settingsTab, setSettingsTab] = useState<null | 'brief' | 'sessions' | 'onboarding' | 'documents'>(null);
   const [activeStage, setActiveStage] = useState<Stage>('brief');
 
   const loadConfig = useCallback(async () => {
@@ -90,6 +93,9 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
     slotted: leads.filter((l) => l.stage === 'slotted'),
     attended: leads.filter((l) => l.stage === 'attended'),
     agreement_sent: leads.filter((l) => l.stage === 'agreement_sent'),
+    onboarding: leads.filter((l) => l.stage === 'onboarding'),
+    onboarding_slotted: leads.filter((l) => l.stage === 'onboarding_slotted'),
+    onboarded: leads.filter((l) => l.stage === 'onboarded'),
     declined: [],
   };
   const activeCol = COLUMNS.find((c) => c.key === activeStage);
@@ -99,6 +105,11 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
     return s ? sessionText(s) : id || '—';
   };
   const sessionsBlock = () => (config?.sessions || []).map((s) => `• ${sessionText(s)}`).join('\n');
+  const onbLabel = (id?: string | null) => {
+    const s = config?.onboardingSessions.find((x) => x.id === id);
+    return s ? sessionText(s) : id || '—';
+  };
+  const fmtDateTime = (d?: string) => (d ? new Date(d).toLocaleString('en-SG', { dateStyle: 'short', timeStyle: 'short' }) : '');
   // Count people already assigned to each session (slotted onward).
   const sessionCounts: Record<string, number> = {};
   leads.forEach((l) => {
@@ -135,6 +146,8 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-medium text-gray-100 text-sm">{lead.name}</span>
           <span className="text-xs text-gray-500 font-mono">{lead.phone}</span>
+          {lead.role === 'potential_onboard' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-teal-950 border border-teal-800 text-teal-300">Potential on-board</span>}
+          {lead.role === 'onboard' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-900 border border-green-700 text-green-200">Sales Rep</span>}
         </div>
         {lr && (
           <p className="text-xs text-gray-400 bg-gray-800/60 rounded-lg px-2 py-1.5 line-clamp-3">“{lr.text}”</p>
@@ -225,13 +238,54 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
           </>
         )}
 
-        {/* Agreement Sent column */}
-        {col === 'agreement_sent' && lead.wf?.agreement && (
-          <span className="text-xs text-gray-400">
-            Sent {new Date(lead.wf.agreement.sentAt).toLocaleString('en-SG', { dateStyle: 'short', timeStyle: 'short' })}
-            <span className="block text-gray-500">{lead.wf.agreement.fileNames?.join(', ')}</span>
-            <span className="block text-purple-300 mt-1">Awaiting signed copy (Phase 2)</span>
-          </span>
+        {/* Agreement column — bot auto-validates the returned signed PDF */}
+        {col === 'agreement_sent' && (
+          <div className="text-xs flex flex-col gap-1">
+            {lead.wf?.agreement && (
+              <span className="text-gray-500">Sent {fmtDateTime(lead.wf.agreement.sentAt)} · {lead.wf.agreement.fileNames?.join(', ')}</span>
+            )}
+            {!lead.wf?.signed && <span className="text-purple-300">Awaiting signed copy…</span>}
+            {lead.wf?.signed && (() => {
+              const r = lead.wf!.signed!.result;
+              return (
+                <div className={`rounded-lg px-2 py-1.5 border ${r?.complete ? 'border-green-700 bg-green-950/30 text-green-300' : 'border-amber-800 bg-amber-950/20 text-amber-300'}`}>
+                  {r?.complete ? '✓ Signed & complete — moved to onboarding' : `⚠ Incomplete (attempt ${lead.wf!.signed!.attempts}) — auto-chased`}
+                  {!r?.complete && r?.missing?.length ? <span className="block text-gray-400 mt-0.5">Missing: {r.missing.join(', ')}</span> : null}
+                  {r && !r.signed ? <span className="block text-gray-500">No signature detected</span> : null}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+
+        {/* Onboarding — bot auto-books on reply; manual assign as fallback */}
+        {col === 'onboarding' && (
+          <>
+            <span className="text-xs text-teal-300">Offered — lead replies to pick (bot books automatically)</span>
+            <select
+              defaultValue=""
+              onChange={(e) => e.target.value && act(`oslot:${lead.id}`, `/wf/onboard-slot/${lead.id}`, { session: e.target.value }, `${lead.name} booked`)}
+              className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-green-600">
+              <option value="" disabled>Assign manually…</option>
+              {config?.onboardingSessions.map((s) => <option key={s.id} value={s.id}>{sessionText(s)}</option>)}
+            </select>
+          </>
+        )}
+
+        {/* Booked into onboarding — take attendance */}
+        {col === 'onboarding_slotted' && (
+          <>
+            <span className="text-xs text-gray-300">Onboarding: <span className="text-emerald-300">{onbLabel(lead.wf?.onboardingSession)}</span></span>
+            <button onClick={() => act(`onb:${lead.id}`, `/wf/onboard/${lead.id}`, null, `${lead.name} onboarded 🎉`)} disabled={b('onb')}
+              className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium py-1.5 rounded-lg">
+              {b('onb') ? '…' : 'Mark onboarded (Sales Rep)'}
+            </button>
+          </>
+        )}
+
+        {/* On-board */}
+        {col === 'onboarded' && (
+          <span className="text-xs text-green-300">✅ Sales Rep{lead.wf?.onboardedAt ? ` · ${fmtDateTime(lead.wf.onboardedAt)}` : ''}</span>
         )}
 
         {/* Manual move */}
@@ -255,9 +309,10 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
       <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 flex flex-wrap items-center gap-3">
         <h2 className="text-base sm:text-lg font-semibold text-gray-100">Recruitment Pipeline</h2>
         <span className="text-xs sm:text-sm text-gray-500">{COLUMNS.reduce((n, c) => n + colLeads[c.key].length, 0)} in pipeline</span>
-        <div className="flex gap-2 sm:ml-auto">
+        <div className="flex flex-wrap gap-2 sm:ml-auto">
           <button onClick={() => setSettingsTab('brief')} className="text-xs sm:text-sm px-3 py-1.5 rounded-lg border bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200">Brief message</button>
           <button onClick={() => setSettingsTab('sessions')} className="text-xs sm:text-sm px-3 py-1.5 rounded-lg border bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200">Sessions</button>
+          <button onClick={() => setSettingsTab('onboarding')} className="text-xs sm:text-sm px-3 py-1.5 rounded-lg border bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200">Onboarding</button>
           <button onClick={() => setSettingsTab('documents')} className="text-xs sm:text-sm px-3 py-1.5 rounded-lg border bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200">Documents</button>
         </div>
       </div>
@@ -311,8 +366,8 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
 
 // ── Settings modal (Brief template / Sessions / Documents) ─────────────────────────
 function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsChanged }: {
-  tab: 'brief' | 'sessions' | 'documents';
-  setTab: (t: null | 'brief' | 'sessions' | 'documents') => void;
+  tab: 'brief' | 'sessions' | 'onboarding' | 'documents';
+  setTab: (t: null | 'brief' | 'sessions' | 'onboarding' | 'documents') => void;
   config: Config | null;
   docs: DocMeta[];
   showToast: (m: string, ok?: boolean) => void;
@@ -320,11 +375,22 @@ function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsC
   onDocsChanged: () => void;
 }) {
   const [briefDraft, setBriefDraft] = useState(config?.briefTemplate || '');
-  const [sessionsDraft, setSessionsDraft] = useState(config?.sessions || []);
+  const [sessionsDraft, setSessionsDraft] = useState<Session[]>(config?.sessions || []);
+  const [obSessionsDraft, setObSessionsDraft] = useState<Session[]>(config?.onboardingSessions || []);
+  const [requiredDraft, setRequiredDraft] = useState((config?.requiredFields || []).join('\n'));
+  const [chaseDraft, setChaseDraft] = useState(config?.chaseTemplate || '');
+  const [obTemplateDraft, setObTemplateDraft] = useState(config?.onboardingTemplate || '');
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  useEffect(() => { setBriefDraft(config?.briefTemplate || ''); setSessionsDraft(config?.sessions || []); }, [config]);
+  useEffect(() => {
+    setBriefDraft(config?.briefTemplate || '');
+    setSessionsDraft(config?.sessions || []);
+    setObSessionsDraft(config?.onboardingSessions || []);
+    setRequiredDraft((config?.requiredFields || []).join('\n'));
+    setChaseDraft(config?.chaseTemplate || '');
+    setObTemplateDraft(config?.onboardingTemplate || '');
+  }, [config]);
 
   const saveConfig = async (body: object, msg: string) => {
     setSaving(true);
@@ -349,14 +415,14 @@ function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsC
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setTab(null)}>
       <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-lg max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-        <div className="flex border-b border-gray-800">
-          {(['brief', 'sessions', 'documents'] as const).map((t) => (
+        <div className="flex border-b border-gray-800 overflow-x-auto">
+          {(['brief', 'sessions', 'onboarding', 'documents'] as const).map((t) => (
             <button key={t} onClick={() => setTab(t)}
-              className={`px-4 py-3 text-sm capitalize ${tab === t ? 'text-green-400 border-b-2 border-green-500' : 'text-gray-400 hover:text-gray-200'}`}>
+              className={`px-4 py-3 text-sm whitespace-nowrap capitalize ${tab === t ? 'text-green-400 border-b-2 border-green-500' : 'text-gray-400 hover:text-gray-200'}`}>
               {t === 'brief' ? 'Brief message' : t}
             </button>
           ))}
-          <button onClick={() => setTab(null)} className="ml-auto px-4 text-gray-500 hover:text-gray-200">✕</button>
+          <button onClick={() => setTab(null)} className="ml-auto px-4 text-gray-500 hover:text-gray-200 shrink-0">✕</button>
         </div>
 
         <div className="p-5 overflow-auto">
@@ -389,6 +455,57 @@ function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsC
               <button onClick={() => setSessionsDraft((d) => [...d, { id: `s${Date.now()}`, label: '', date: '', capacity: 10 }])}
                 className="text-sm text-gray-400 hover:text-gray-200 self-start">+ Add session</button>
               <button onClick={() => saveConfig({ sessions: sessionsDraft.filter((s) => s.label.trim()) }, 'Sessions saved')} disabled={saving}
+                className="self-end bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg">
+                {saving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          )}
+
+          {tab === 'onboarding' && (
+            <div className="flex flex-col gap-5">
+              <div className="flex flex-col gap-2">
+                <label className="text-xs text-gray-400">Onboarding (2nd) sessions — offered automatically once the agreement is signed</label>
+                {obSessionsDraft.map((s, i) => (
+                  <div key={i} className="flex gap-2 items-center flex-wrap sm:flex-nowrap">
+                    <input value={s.label} onChange={(e) => setObSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, label: e.target.value } : x))}
+                      className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" placeholder="Label e.g. Onboarding — Mon 7pm" />
+                    <input type="date" value={s.date || ''} onChange={(e) => setObSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, date: e.target.value } : x))}
+                      className="w-36 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                    <input type="number" value={s.capacity} title="Capacity" onChange={(e) => setObSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, capacity: Number(e.target.value) } : x))}
+                      className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                    <button onClick={() => setObSessionsDraft((d) => d.filter((_, j) => j !== i))} className="text-gray-500 hover:text-red-400 px-2">✕</button>
+                  </div>
+                ))}
+                <button onClick={() => setObSessionsDraft((d) => [...d, { id: `ob${Date.now()}`, label: '', date: '', capacity: 10 }])}
+                  className="text-sm text-gray-400 hover:text-gray-200 self-start">+ Add onboarding session</button>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-xs text-gray-400">Required fields on the signed agreement — one per line (drives auto-validation)</label>
+                <textarea rows={6} value={requiredDraft} onChange={(e) => setRequiredDraft(e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 resize-none focus:outline-none focus:border-green-600 leading-relaxed" />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-xs text-gray-400">Auto-chase when fields are missing — <span className="text-gray-500">[Name], [Missing]</span></label>
+                <textarea rows={4} value={chaseDraft} onChange={(e) => setChaseDraft(e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 resize-none focus:outline-none focus:border-green-600 leading-relaxed" />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-xs text-gray-400">Thank-you + onboarding offer (sent when complete) — <span className="text-gray-500">[Name], [Sessions]</span></label>
+                <textarea rows={4} value={obTemplateDraft} onChange={(e) => setObTemplateDraft(e.target.value)}
+                  className="bg-gray-800 border border-gray-700 rounded-lg p-3 text-sm text-gray-200 resize-none focus:outline-none focus:border-green-600 leading-relaxed" />
+              </div>
+
+              <button
+                onClick={() => saveConfig({
+                  onboardingSessions: obSessionsDraft.filter((s) => s.label.trim()),
+                  requiredFields: requiredDraft.split('\n').map((x) => x.trim()).filter(Boolean),
+                  chaseTemplate: chaseDraft,
+                  onboardingTemplate: obTemplateDraft,
+                }, 'Onboarding settings saved')}
+                disabled={saving}
                 className="self-end bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg">
                 {saving ? 'Saving…' : 'Save'}
               </button>

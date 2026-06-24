@@ -20,8 +20,12 @@ export type Confirmation = {
   detectedAt: string;
 };
 
-// Ordered recruitment-pipeline stages (Phase 1).
-export type Stage = 'brief' | 'confirmed' | 'slotted' | 'attended' | 'agreement_sent' | 'declined';
+// Ordered recruitment-pipeline stages.
+export type Stage =
+  | 'brief' | 'confirmed' | 'slotted' | 'attended' | 'agreement_sent'
+  | 'onboarding' | 'onboarding_slotted' | 'onboarded' | 'declined';
+
+export type SignedResult = { signed: boolean; missing: string[]; complete: boolean; notes: string };
 
 export type Wf = {
   enteredAt?: string;
@@ -34,7 +38,15 @@ export type Wf = {
   slottedAt?: string;
   attendedAt?: string;
   agreement?: { sentAt: string; fileIds: string[]; fileNames: string[] };
+  // Phase 2
+  signed?: { attempts: number; receivedAt?: string; lastFile?: string; result?: SignedResult; history?: Array<Record<string, unknown>> };
+  onboardingOfferedAt?: string;
+  onboardingSession?: string | null;
+  onboardingSlottedAt?: string;
+  onboardedAt?: string;
 };
+
+export type Role = 'lead' | 'potential_onboard' | 'onboard';
 
 export type Lead = {
   id: number;
@@ -51,6 +63,7 @@ export type Lead = {
   ai?: AiResult;
   stage?: Stage;
   wf?: Wf;
+  role?: Role;
 };
 
 export type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean; autoReply?: boolean };
@@ -59,7 +72,15 @@ export type Session = { id: string; label: string; date?: string; capacity: numb
 
 export type DocMeta = { id: string; name: string; mimetype: string; size: number; uploadedAt: string; isDefault: boolean };
 
-export type Config = { autoReply: boolean; sessions: Session[]; briefTemplate: string };
+export type Config = {
+  autoReply: boolean;
+  sessions: Session[];
+  briefTemplate: string;
+  onboardingSessions: Session[];
+  requiredFields: string[];
+  chaseTemplate: string;
+  onboardingTemplate: string;
+};
 
 // Display metadata for each pipeline stage — shared by the board and the leads table.
 export const STAGE_META: Record<string, { label: string; chip: string }> = {
@@ -68,6 +89,9 @@ export const STAGE_META: Record<string, { label: string; chip: string }> = {
   slotted: { label: 'Slotted', chip: 'bg-cyan-900/60 border-cyan-700 text-cyan-300' },
   attended: { label: 'Attended', chip: 'bg-green-900/60 border-green-700 text-green-300' },
   agreement_sent: { label: 'Agreement Sent', chip: 'bg-purple-900/60 border-purple-700 text-purple-300' },
+  onboarding: { label: 'Onboarding', chip: 'bg-teal-900/60 border-teal-700 text-teal-300' },
+  onboarding_slotted: { label: 'Onboarding Slotted', chip: 'bg-emerald-900/60 border-emerald-700 text-emerald-300' },
+  onboarded: { label: 'On-board ✅', chip: 'bg-green-800/70 border-green-600 text-green-200' },
   declined: { label: 'Declined', chip: 'bg-red-950/60 border-red-800 text-red-300' },
 };
 
@@ -79,6 +103,9 @@ export const STAGE_OPTIONS: { value: string; label: string }[] = [
   { value: 'slotted', label: 'Slotted' },
   { value: 'attended', label: 'Attended' },
   { value: 'agreement_sent', label: 'Agreement Sent' },
+  { value: 'onboarding', label: 'Onboarding' },
+  { value: 'onboarding_slotted', label: 'Onboarding Slotted' },
+  { value: 'onboarded', label: 'On-board (Sales Rep)' },
   { value: 'declined', label: 'Declined' },
 ];
 
@@ -89,7 +116,10 @@ export function subFlow(l: Lead): string {
   if (s === 'confirmed') return 'to slot';
   if (s === 'slotted') return 'scheduled';
   if (s === 'attended') return 'send agreement';
-  if (s === 'agreement_sent') return 'awaiting signed';
+  if (s === 'agreement_sent') return l.wf?.signed ? (l.wf.signed.result?.complete ? 'signed ✓' : `missing ${l.wf.signed.result?.missing?.length ?? 0}`) : 'awaiting signed';
+  if (s === 'onboarding') return 'pick onboarding';
+  if (s === 'onboarding_slotted') return 'onboarding booked';
+  if (s === 'onboarded') return 'Sales Rep';
   if (s === 'declined') return '';
   if (!s && l.ai?.category === 'interested') return 'interested';
   return l.sent ? 'sent' : 'new';

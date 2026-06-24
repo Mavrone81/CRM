@@ -2,6 +2,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  downloadMediaMessage,
 } from '@whiskeysockets/baileys';
 import { rmSync, readdirSync, mkdirSync, existsSync, unlinkSync } from 'fs';
 import pino from 'pino';
@@ -19,12 +20,16 @@ const CONFIG_PATH = join(__dirname, 'data', 'config.json');
 const KNOWLEDGE_PATH = join(__dirname, 'knowledge.md');
 const DOCS_DIR = join(__dirname, 'data', 'documents');
 const DOCS_META_PATH = join(__dirname, 'data', 'documents.json');
+const SIGNED_DIR = join(__dirname, 'data', 'signed'); // returned signed agreements
 if (!existsSync(DOCS_DIR)) mkdirSync(DOCS_DIR, { recursive: true });
+if (!existsSync(SIGNED_DIR)) mkdirSync(SIGNED_DIR, { recursive: true });
 
 // ── Recruitment pipeline stages (ordered) ───────────────────────────────────────
 // A lead with no `stage` lives only in the Leads/Replies inbox. When the interest
 // classifier tags it "interested" it is auto-surfaced into the first stage, 'brief'.
-const STAGES = ['brief', 'confirmed', 'slotted', 'attended', 'agreement_sent'];
+// After 'agreement_sent', the bot auto-validates the returned signed PDF, then
+// auto-advances to onboarding (role: Lead -> Potential On-board -> On-board).
+const STAGES = ['brief', 'confirmed', 'slotted', 'attended', 'agreement_sent', 'onboarding', 'onboarding_slotted', 'onboarded'];
 
 // ── Knowledge base ──────────────────────────────────────────────────────────────
 // Loaded ONCE at startup (baked into the bot — never re-parsed per message).
@@ -48,6 +53,25 @@ const CONFIG_DEFAULTS = {
   // [Sessions] -> the formatted list of sessions (with dates) at compose time.
   briefTemplate:
     "Hi [Name], great to hear you're keen! We'd love to have you at our recruitment briefing.\n\nUpcoming sessions:\n[Sessions]\n\nWhich timing suits you best? Once you confirm I'll reserve your spot.",
+
+  // ── Phase 2: onboarding (2nd) sessions, signed-agreement validation, templates ──
+  onboardingSessions: [
+    { id: 'ob1', label: 'Onboarding — Mon 7:00pm', date: '', capacity: 10 },
+    { id: 'ob2', label: 'Onboarding — Sat 10:00am', date: '', capacity: 10 },
+  ],
+  // Fields the signed agreement MUST contain to be considered complete.
+  requiredFields: [
+    'Full name (as in NRIC)', 'NRIC number', 'Nationality', 'Date of birth',
+    'Gender', 'Marital status', 'Home address', 'Mobile number',
+    'Commencement date', 'Emergency contact name', 'Emergency contact relationship',
+    'Emergency contact number', "Associate's signature",
+  ],
+  // Auto-reply when the returned signed agreement is missing fields. [Missing] -> bullet list.
+  chaseTemplate:
+    "Thanks [Name]! I had a look at your signed agreement, but a few details still need completing:\n[Missing]\n\nPlease fill those in and send the signed PDF back to me here.",
+  // Auto-reply when the agreement is complete + signed. [Sessions] -> onboarding options.
+  onboardingTemplate:
+    "Thank you [Name] — your agreement is complete and received! 🎉 Welcome aboard.\n\nNext is your onboarding session. Please pick one:\n[Sessions]\n\nReply with the one that works for you and I'll lock it in.",
 };
 function readConfig() {
   let saved = {};
@@ -191,6 +215,82 @@ Classify their attendance.`;
   }
 }
 
+// ── Session list formatting (for the auto onboarding offer) ──────────────────────
+function fmtSessionList(sessions) {
+  return (sessions || []).map((s) => `• ${s.label}${s.date ? ` · ${s.date}` : ''}`).join('\n');
+}
+
+// ── Signed-agreement validator (Claude reads the PDF) ────────────────────────────
+const SIGNED_SCHEMA = {
+  type: 'object',
+  properties: {
+    signed: { type: 'boolean', description: "Whether the Associate's handwritten signature is present on the signature page" },
+    missing: { type: 'array', items: { type: 'string' }, description: 'Required fields that are blank, missing or illegible' },
+    complete: { type: 'boolean', description: 'True ONLY if signed is true AND missing is empty' },
+    notes: { type: 'string', description: 'One short sentence on what was checked' },
+  },
+  required: ['signed', 'missing', 'complete', 'notes'],
+  additionalProperties: false,
+};
+
+async function validateSignedAgreement(name, pdfBase64, requiredFields) {
+  if (!anthropic) return { signed: false, missing: ['(AI validation unavailable — manual review needed)'], complete: false, notes: 'No ANTHROPIC_API_KEY' };
+  const fieldList = (requiredFields || []).map((f) => `- ${f}`).join('\n');
+  const system = `You verify a signed "Associate Agreement" PDF. For each REQUIRED field, decide if it is filled in (handwritten or typed value present). Also check whether the Associate's signature is present on the signature page. complete=true ONLY if the signature is present AND no required fields are missing. Be practical and do not invent missing fields.`;
+  try {
+    const res = await anthropic.messages.create({
+      model: AI_MODEL,
+      max_tokens: 512,
+      system,
+      output_config: { format: { type: 'json_schema', schema: SIGNED_SCHEMA } },
+      messages: [{ role: 'user', content: [
+        { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
+        { type: 'text', text: `Applicant: ${name}\nRequired fields:\n${fieldList}\n\nReview the attached signed agreement and report completeness.` },
+      ] }],
+    });
+    const text = res.content.find((b) => b.type === 'text')?.text || '{}';
+    return JSON.parse(text);
+  } catch (err) {
+    console.error('[ai] signed validation failed:', err.message);
+    return { signed: false, missing: ['(validation error — manual review needed)'], complete: false, notes: err.message };
+  }
+}
+
+// ── Onboarding-session choice parser ─────────────────────────────────────────────
+const CHOICE_SCHEMA = {
+  type: 'object',
+  properties: {
+    sessionId: { type: 'string', description: 'id of the chosen onboarding session, or "" if unclear' },
+    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+  },
+  required: ['sessionId', 'confidence'],
+  additionalProperties: false,
+};
+
+async function parseOnboardingChoice(text, sessions) {
+  if (!anthropic) {
+    const t = (text || '').toLowerCase();
+    const hit = (sessions || []).find((s) => s.label.toLowerCase().split(/\W+/).some((w) => w.length > 3 && t.includes(w)));
+    return { sessionId: hit?.id || '', confidence: 'low' };
+  }
+  const opts = (sessions || []).map((s) => `id=${s.id}: ${s.label}${s.date ? ' on ' + s.date : ''}`).join('\n');
+  try {
+    const res = await anthropic.messages.create({
+      model: AI_MODEL,
+      max_tokens: 128,
+      system: "Map the contact's reply to one of the onboarding session options. Return the matching session id, or \"\" if their reply does not clearly pick one.",
+      output_config: { format: { type: 'json_schema', schema: CHOICE_SCHEMA } },
+      messages: [{ role: 'user', content: `Options:\n${opts}\n\nTheir reply: "${text}"\n\nWhich session id did they pick?` }],
+    });
+    const r = JSON.parse(res.content.find((b) => b.type === 'text')?.text || '{}');
+    if (!(sessions || []).find((s) => s.id === r.sessionId)) r.sessionId = '';
+    return r;
+  } catch (err) {
+    console.error('[ai] onboarding choice parse failed:', err.message);
+    return { sessionId: '', confidence: 'low' };
+  }
+}
+
 // ── State ─────────────────────────────────────────────────────────────────────
 let sock = null;
 let connectionState = 'close'; // 'close' | 'connecting' | 'open'
@@ -262,11 +362,12 @@ async function connectWA() {
       const senderPhone = (phoneJid || '').replace('@s.whatsapp.net', '');
       const senderDigits = senderPhone.replace(/\D/g, '');
 
+      const docMsg = msg.message.documentMessage || msg.message.documentWithCaptionMessage?.message?.documentMessage;
       const text =
         msg.message.conversation ||
         msg.message.extendedTextMessage?.text ||
         msg.message.imageMessage?.caption ||
-        '[media]';
+        (docMsg ? `[document: ${docMsg.fileName || 'file'}]` : '[media]');
 
       const leads = readLeads();
       // Match on full normalised number, with a last-8-digits fallback so a
@@ -302,8 +403,73 @@ async function connectWA() {
         saveLeads(fresh);
         console.log(`[attend] ${target.name}: ${att.status} (${att.confidence})`);
         // No auto-reply once invited — attendance confirmation is approved by a human.
+      } else if (target.stage === 'agreement_sent') {
+        // Awaiting the signed agreement back. A returned PDF triggers auto-validation.
+        const isPdf = docMsg && (docMsg.mimetype || '').toLowerCase().includes('pdf');
+        saveLeads(fresh); // keep the reply record either way
+        if (isPdf) {
+          try {
+            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage });
+            const fname = `${target.id}-${Date.now()}.pdf`;
+            writeFileSync(join(SIGNED_DIR, fname), buffer);
+            const cfg = readConfig();
+            const result = await validateSignedAgreement(target.name, buffer.toString('base64'), cfg.requiredFields);
+
+            const f2 = readLeads();
+            const t2 = f2.find((l) => l.id === target.id);
+            if (t2) {
+              t2.wf = t2.wf || {};
+              const prev = t2.wf.signed || { attempts: 0, history: [] };
+              t2.wf.signed = { attempts: (prev.attempts || 0) + 1, history: [...(prev.history || []), { at: now(), file: fname, ...result }], lastFile: fname, receivedAt: now(), result };
+              const jid = toJid(t2.phone);
+              if (result.complete) {
+                // ✓ complete + signed -> auto thank-you + onboarding options, role -> potential on-board
+                t2.stage = 'onboarding';
+                t2.role = 'potential_onboard';
+                t2.wf.onboardingOfferedAt = now();
+                const offer = (cfg.onboardingTemplate || '').replace(/\[Name\]/g, t2.name).replace(/\[Sessions\]/g, fmtSessionList(cfg.onboardingSessions));
+                if (!t2.sentReplies) t2.sentReplies = [];
+                t2.sentReplies.push({ text: offer, timestamp: now(), auto: true, kind: 'onboarding-offer' });
+                saveLeads(f2);
+                if (jid) { try { await sock.sendMessage(jid, { text: offer }); } catch {} }
+                console.log(`[wf] ${t2.name} agreement COMPLETE -> onboarding (potential on-board)`);
+              } else {
+                // ✗ missing fields -> auto-chase
+                const missingBlock = (result.missing || []).map((m) => `• ${m}`).join('\n') || '• (some details)';
+                const chase = (cfg.chaseTemplate || '').replace(/\[Name\]/g, t2.name).replace(/\[Missing\]/g, missingBlock);
+                if (!t2.sentReplies) t2.sentReplies = [];
+                t2.sentReplies.push({ text: chase, timestamp: now(), auto: true, kind: 'chase' });
+                saveLeads(f2);
+                if (jid) { try { await sock.sendMessage(jid, { text: chase }); } catch {} }
+                console.log(`[wf] ${t2.name} signed INCOMPLETE (missing ${result.missing?.length || 0}) -> chased`);
+              }
+            }
+          } catch (err) {
+            console.error('[wf] signed-return processing failed:', err.message);
+          }
+        }
+      } else if (target.stage === 'onboarding') {
+        // Awaiting the lead's onboarding-session pick — AI parses their reply.
+        const cfg = readConfig();
+        const r = await parseOnboardingChoice(text, cfg.onboardingSessions);
+        const f2 = readLeads();
+        const t2 = f2.find((l) => l.id === target.id);
+        if (t2 && r.sessionId) {
+          const s = cfg.onboardingSessions.find((x) => x.id === r.sessionId);
+          t2.stage = 'onboarding_slotted';
+          t2.wf = { ...(t2.wf || {}), onboardingSession: r.sessionId, onboardingSlottedAt: now() };
+          const confirm = `Great ${t2.name}, you're booked for ${s?.label}${s?.date ? ' on ' + s.date : ''}. See you there!`;
+          if (!t2.sentReplies) t2.sentReplies = [];
+          t2.sentReplies.push({ text: confirm, timestamp: now(), auto: true, kind: 'onboarding-confirm' });
+          saveLeads(f2);
+          const jid = toJid(t2.phone);
+          if (jid) { try { await sock.sendMessage(jid, { text: confirm }); } catch {} }
+          console.log(`[wf] ${t2.name} picked onboarding ${r.sessionId} -> onboarding_slotted`);
+        } else {
+          saveLeads(fresh); // unclear pick — leave for another reply / manual
+        }
       } else if (target.stage && target.stage !== 'brief') {
-        // Past the brief stage — just keep the reply, no re-classification.
+        // Other stages — just keep the reply, no re-classification.
         saveLeads(fresh);
       } else {
         // Inbox stage: interest classification, auto-surfacing interested leads to 'brief'.
@@ -589,7 +755,11 @@ app.get('/api/config', (_req, res) => res.json(readConfig()));
 app.post('/api/config', (req, res) => {
   const next = { ...readConfig() };
   if (Array.isArray(req.body.sessions)) next.sessions = req.body.sessions;
+  if (Array.isArray(req.body.onboardingSessions)) next.onboardingSessions = req.body.onboardingSessions;
+  if (Array.isArray(req.body.requiredFields)) next.requiredFields = req.body.requiredFields;
   if (typeof req.body.briefTemplate === 'string') next.briefTemplate = req.body.briefTemplate;
+  if (typeof req.body.chaseTemplate === 'string') next.chaseTemplate = req.body.chaseTemplate;
+  if (typeof req.body.onboardingTemplate === 'string') next.onboardingTemplate = req.body.onboardingTemplate;
   writeConfig(next);
   res.json({ ok: true, config: next });
 });
@@ -743,7 +913,32 @@ app.post('/api/wf/agreement/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Assign an onboarding (2nd) session -> 'onboarding_slotted', role = potential on-board
+app.post('/api/wf/onboard-slot/:id', (req, res) => {
+  const leads = readLeads();
+  const lead = findLead(leads, req.params.id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  lead.stage = 'onboarding_slotted';
+  lead.role = 'potential_onboard';
+  lead.wf = { ...(lead.wf || {}), onboardingSession: req.body.session || null, onboardingSlottedAt: new Date().toISOString() };
+  saveLeads(leads);
+  res.json({ ok: true, lead });
+});
+
+// Tag present at the onboarding session -> 'onboarded' (On-board / Sales Rep)
+app.post('/api/wf/onboard/:id', (req, res) => {
+  const leads = readLeads();
+  const lead = findLead(leads, req.params.id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  lead.stage = 'onboarded';
+  lead.role = 'onboard';
+  lead.wf = { ...(lead.wf || {}), onboardedAt: new Date().toISOString() };
+  saveLeads(leads);
+  res.json({ ok: true, lead });
+});
+
 // Generic manual stage move (drag/correction). null clears the stage (back to inbox).
+const ROLE_FOR_STAGE = (s) => s === 'onboarded' ? 'onboard' : (s === 'onboarding' || s === 'onboarding_slotted') ? 'potential_onboard' : 'lead';
 app.post('/api/wf/stage/:id', (req, res) => {
   const { stage } = req.body;
   if (stage !== null && !STAGES.includes(stage) && stage !== 'declined')
@@ -751,7 +946,8 @@ app.post('/api/wf/stage/:id', (req, res) => {
   const leads = readLeads();
   const lead = findLead(leads, req.params.id);
   if (!lead) return res.status(404).json({ error: 'not found' });
-  if (stage === null) delete lead.stage; else lead.stage = stage;
+  if (stage === null) { delete lead.stage; lead.role = 'lead'; }
+  else { lead.stage = stage; lead.role = ROLE_FOR_STAGE(stage); }
   saveLeads(leads);
   res.json({ ok: true, lead });
 });
