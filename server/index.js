@@ -41,12 +41,13 @@ const CONFIG_DEFAULTS = {
   autoReply: false,
   // Briefing sessions an attendee can be slotted into (editable from the UI).
   sessions: [
-    { id: 'thu', label: 'Thursday 7:30pm', capacity: 10 },
-    { id: 'sun', label: 'Sunday 2:00pm', capacity: 10 },
+    { id: 'thu', label: 'Thursday 7:30pm', date: '', capacity: 10 },
+    { id: 'sun', label: 'Sunday 2:00pm', date: '', capacity: 10 },
   ],
-  // Default personalised invite for the Brief stage. [Name] -> the lead's name.
+  // Default personalised invite for the Brief stage. [Name] -> lead's name,
+  // [Sessions] -> the formatted list of sessions (with dates) at compose time.
   briefTemplate:
-    "Hi [Name], great to hear you're keen! We'd love to have you at our recruitment briefing.\n\nWe run sessions on Thursday 7:30pm and Sunday 2pm. Which one suits you better? Once you confirm I'll reserve your spot.",
+    "Hi [Name], great to hear you're keen! We'd love to have you at our recruitment briefing.\n\nUpcoming sessions:\n[Sessions]\n\nWhich timing suits you best? Once you confirm I'll reserve your spot.",
 };
 function readConfig() {
   let saved = {};

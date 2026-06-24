@@ -1,7 +1,14 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import type { Lead, WaStatus, Config, DocMeta, Stage } from './types';
+import type { Lead, WaStatus, Config, DocMeta, Stage, Session } from './types';
+
+const fmtDate = (d?: string) => {
+  if (!d) return '';
+  const dt = new Date(d + 'T00:00:00');
+  return isNaN(dt.getTime()) ? d : dt.toLocaleDateString('en-SG', { weekday: 'short', day: 'numeric', month: 'short' });
+};
+const sessionText = (s: Session) => (s.date ? `${s.label} · ${fmtDate(s.date)}` : s.label);
 
 const API = '/api/proxy';
 
@@ -85,7 +92,11 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
     declined: [],
   };
 
-  const sessionLabel = (id?: string | null) => config?.sessions.find((s) => s.id === id)?.label || id || '—';
+  const sessionLabel = (id?: string | null) => {
+    const s = config?.sessions.find((x) => x.id === id);
+    return s ? sessionText(s) : id || '—';
+  };
+  const sessionsBlock = () => (config?.sessions || []).map((s) => `• ${sessionText(s)}`).join('\n');
   // Count people already assigned to each session (slotted onward).
   const sessionCounts: Record<string, number> = {};
   leads.forEach((l) => {
@@ -98,18 +109,27 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
 
   const openInvite = (l: Lead) => {
     const tmpl = config?.briefTemplate || 'Hi [Name],';
-    setInviteText(tmpl.replace(/\[Name\]/g, l.name));
+    let msg = tmpl.replace(/\[Name\]/g, l.name);
+    const block = sessionsBlock();
+    // Always integrate the dated session list: replace the [Sessions] token if
+    // present, otherwise append it so sessions are never left out of the invite.
+    if (msg.includes('[Sessions]')) msg = msg.replace(/\[Sessions\]/g, block);
+    else if (block) msg += `\n\nUpcoming sessions:\n${block}`;
+    setInviteText(msg);
     setInviteFor(l.id);
   };
 
   // ── Card ───────────────────────────────────────────────────────────────────────
-  const Card = ({ lead, col }: { lead: Lead; col: Stage }) => {
+  // Rendered as a plain function (NOT <Card/>) so the 2s leads poll re-renders
+  // cards in place instead of remounting them — otherwise open <select> dropdowns
+  // and the invite composer would reset every poll tick.
+  const renderCard = (lead: Lead, col: Stage) => {
     const lr = lastReply(lead);
     const conf = lead.wf?.confirmation;
     const invited = !!lead.wf?.invitedAt;
     const b = (k: string) => busy.has(`${k}:${lead.id}`);
     return (
-      <div className="rounded-xl border border-gray-700 bg-gray-900/50 p-3 flex flex-col gap-2">
+      <div key={lead.id} className="rounded-xl border border-gray-700 bg-gray-900/50 p-3 flex flex-col gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-medium text-gray-100 text-sm">{lead.name}</span>
           <span className="text-xs text-gray-500 font-mono">{lead.phone}</span>
@@ -175,7 +195,7 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
             className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-green-600">
             <option value="" disabled>Assign session…</option>
             {config?.sessions.map((s) => (
-              <option key={s.id} value={s.id}>{s.label} ({sessionCounts[s.id] || 0}/{s.capacity})</option>
+              <option key={s.id} value={s.id}>{sessionText(s)} ({sessionCounts[s.id] || 0}/{s.capacity})</option>
             ))}
           </select>
         )}
@@ -251,7 +271,7 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
               </div>
               <p className="text-[11px] text-gray-600 px-1 -mt-2">{c.hint}</p>
               <div className="flex flex-col gap-3">
-                {colLeads[c.key].map((l) => <Card key={l.id} lead={l} col={c.key} />)}
+                {colLeads[c.key].map((l) => renderCard(l, c.key))}
                 {colLeads[c.key].length === 0 && <div className="text-xs text-gray-700 text-center py-6 border border-dashed border-gray-800 rounded-xl">empty</div>}
               </div>
             </div>
@@ -336,17 +356,19 @@ function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsC
 
           {tab === 'sessions' && (
             <div className="flex flex-col gap-3">
-              <label className="text-xs text-gray-400">Briefing sessions leads can be slotted into</label>
+              <label className="text-xs text-gray-400">Briefing sessions leads can be slotted into — the date is included in the invite sent to leads</label>
               {sessionsDraft.map((s, i) => (
-                <div key={i} className="flex gap-2 items-center">
+                <div key={i} className="flex gap-2 items-center flex-wrap sm:flex-nowrap">
                   <input value={s.label} onChange={(e) => setSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, label: e.target.value } : x))}
-                    className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" placeholder="Label e.g. Thursday 7:30pm" />
-                  <input type="number" value={s.capacity} onChange={(e) => setSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, capacity: Number(e.target.value) } : x))}
-                    className="w-20 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                    className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" placeholder="Label e.g. Thursday 7:30pm" />
+                  <input type="date" value={s.date || ''} onChange={(e) => setSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, date: e.target.value } : x))}
+                    className="w-36 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                  <input type="number" value={s.capacity} title="Capacity" onChange={(e) => setSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, capacity: Number(e.target.value) } : x))}
+                    className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
                   <button onClick={() => setSessionsDraft((d) => d.filter((_, j) => j !== i))} className="text-gray-500 hover:text-red-400 px-2">✕</button>
                 </div>
               ))}
-              <button onClick={() => setSessionsDraft((d) => [...d, { id: `s${Date.now()}`, label: '', capacity: 10 }])}
+              <button onClick={() => setSessionsDraft((d) => [...d, { id: `s${Date.now()}`, label: '', date: '', capacity: 10 }])}
                 className="text-sm text-gray-400 hover:text-gray-200 self-start">+ Add session</button>
               <button onClick={() => saveConfig({ sessions: sessionsDraft.filter((s) => s.label.trim()) }, 'Sessions saved')} disabled={saving}
                 className="self-end bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg">

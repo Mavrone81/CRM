@@ -3,8 +3,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Pipeline from './Pipeline';
+import Analytics from './Analytics';
 
 import type { AiResult, Lead, WaStatus } from './types';
+import { STAGE_META, STAGE_OPTIONS, subFlow } from './types';
 
 const DEFAULT_TEMPLATE = `Hi [Name], We connected previously regarding a business/career opportunity, but I recently switched to WhatsApp Business and lost my chat history.
 
@@ -33,7 +35,7 @@ export default function Dashboard() {
   const [classifying, setClassifying] = useState<Set<number>>(new Set());
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [collapseAll, setCollapseAll] = useState(false);
-  const [view, setView] = useState<'leads' | 'replies' | 'pipeline'>('leads');
+  const [view, setView] = useState<'analytics' | 'leads' | 'replies' | 'pipeline'>('analytics');
   const [replyFilter, setReplyFilter] = useState<'all' | 'interested' | 'not' | 'question' | 'other'>('all');
 
   const showToast = (msg: string, ok = true) => {
@@ -275,6 +277,23 @@ export default function Dashboard() {
     router.refresh();
   };
 
+  // Update a lead's pipeline stage straight from the Leads table.
+  const updateStage = async (id: number, value: string) => {
+    const stage = value === 'inbox' ? null : value;
+    try {
+      const r = await fetch(`${API}/wf/stage/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, stage: (stage || undefined) as Lead['stage'] } : l)));
+        showToast('Status updated');
+      } else showToast(d.error || 'Update failed', false);
+    } catch { showToast('Network error', false); }
+  };
+
   return (
     <div className="flex flex-col min-h-screen">
       {/* Header */}
@@ -285,6 +304,14 @@ export default function Dashboard() {
 
           {/* View toggle */}
           <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 sm:ml-2">
+            <button
+              onClick={() => setView('analytics')}
+              className={`px-3 py-1 rounded text-sm transition-colors ${
+                view === 'analytics' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Analytics
+            </button>
             <button
               onClick={() => setView('leads')}
               className={`px-3 py-1 rounded text-sm transition-colors ${
@@ -362,8 +389,8 @@ export default function Dashboard() {
       </header>
 
       <div className="flex flex-col md:flex-row flex-1 md:overflow-hidden">
-        {/* Sidebar (hidden on the pipeline board, which needs the full width) */}
-        {view !== 'pipeline' && (
+        {/* Sidebar (hidden on the full-width board / analytics views) */}
+        {view !== 'pipeline' && view !== 'analytics' && (
         <aside className="w-full md:w-72 border-b md:border-b-0 md:border-r border-gray-800 flex flex-col gap-6 p-5 md:shrink-0">
           {/* QR */}
           {status.state !== 'open' && (
@@ -418,7 +445,9 @@ export default function Dashboard() {
 
         {/* Main */}
         <main className="flex-1 flex flex-col min-h-0 md:overflow-hidden">
-          {view === 'pipeline' ? (
+          {view === 'analytics' ? (
+            <Analytics leads={leads} />
+          ) : view === 'pipeline' ? (
             <Pipeline leads={leads} status={status} showToast={showToast} refresh={fetchLeads} />
           ) : view === 'replies' ? (
           <>
@@ -687,13 +716,28 @@ export default function Dashboard() {
                       )}
                     </td>
                     <td className="px-4 py-3 hidden sm:table-cell">
-                      {lead.sent ? (
-                        <span className="inline-flex items-center gap-1 text-xs text-green-400">
-                          <span>✓</span> Sent
-                        </span>
-                      ) : (
-                        <span className="text-xs text-gray-600">—</span>
-                      )}
+                      {(() => {
+                        const cur = lead.stage || (lead.ai?.category === 'interested' ? 'brief' : 'inbox');
+                        const meta = STAGE_META[cur];
+                        return (
+                          <div className="flex flex-col gap-0.5 items-start">
+                            <select
+                              value={cur}
+                              onChange={(e) => updateStage(lead.id, e.target.value)}
+                              className={`text-xs rounded-full border px-2 py-1 focus:outline-none cursor-pointer ${
+                                meta ? meta.chip : lead.sent ? 'bg-green-950/40 border-green-800 text-green-300' : 'bg-gray-800 border-gray-700 text-gray-400'
+                              }`}
+                            >
+                              {STAGE_OPTIONS.map((o) => (
+                                <option key={o.value} value={o.value} className="bg-gray-900 text-gray-200">
+                                  {o.value === 'inbox' ? (lead.sent ? 'Sent' : 'New') : o.label}
+                                </option>
+                              ))}
+                            </select>
+                            <span className="text-[11px] text-gray-500 pl-1">{subFlow(lead)}</span>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 sm:px-4 py-3 text-right">
                       {!lead.sent && (
