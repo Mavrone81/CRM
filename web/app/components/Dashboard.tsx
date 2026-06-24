@@ -26,7 +26,7 @@ type Lead = {
   ai?: AiResult;
 };
 
-type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean };
+type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean; autoReply?: boolean };
 
 const DEFAULT_TEMPLATE = `Hi [Name], We connected previously regarding a business/career opportunity, but I recently switched to WhatsApp Business and lost my chat history.
 
@@ -262,16 +262,34 @@ export default function Dashboard() {
 
   const sentCount = leads.filter((l) => l.sent).length;
 
+  const toggleBot = async () => {
+    const next = !status.autoReply;
+    try {
+      const r = await fetch(`${API}/autoreply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setStatus((s) => ({ ...s, autoReply: d.autoReply }));
+        showToast(d.autoReply ? 'Bot auto-reply ON' : 'Switched to manual replies');
+      }
+    } catch {
+      showToast('Network error', false);
+    }
+  };
+
   return (
     <div className="flex flex-col min-h-screen">
       {/* Header */}
-      <header className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <span className="text-2xl font-bold text-green-400">Watapp</span>
-          <span className="text-gray-500 text-sm">{leads.length} leads · {sentCount} sent</span>
+      <header className="border-b border-gray-800 px-4 sm:px-6 py-3 sm:py-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+          <span className="text-xl sm:text-2xl font-bold text-green-400">Watapp</span>
+          <span className="text-gray-500 text-xs sm:text-sm">{leads.length} leads · {sentCount} sent</span>
 
           {/* View toggle */}
-          <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 ml-2">
+          <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 sm:ml-2">
             <button
               onClick={() => setView('leads')}
               className={`px-3 py-1 rounded text-sm transition-colors ${
@@ -296,9 +314,24 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* WA Status */}
-        <div className="flex items-center gap-3">
-          <span className={`inline-flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-full border ${
+        {/* Bot mode + WA Status */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {status.ai && (
+            <button
+              onClick={toggleBot}
+              title={status.autoReply ? 'Bot is auto-replying — click to switch to manual' : 'Manual mode — click to let the bot auto-reply'}
+              className={`inline-flex items-center gap-2 text-xs sm:text-sm font-medium px-3 py-1.5 rounded-full border transition-colors ${
+                status.autoReply
+                  ? 'bg-purple-950 border-purple-600 text-purple-200 hover:bg-purple-900'
+                  : 'bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              <span>{status.autoReply ? '🤖' : '✋'}</span>
+              <span className="hidden sm:inline">{status.autoReply ? 'Bot: Auto' : 'Manual'}</span>
+              <span className="sm:hidden">{status.autoReply ? 'Auto' : 'Man'}</span>
+            </button>
+          )}
+          <span className={`inline-flex items-center gap-2 text-xs sm:text-sm font-medium px-3 py-1.5 rounded-full border ${
             status.state === 'open'
               ? 'bg-green-950 border-green-700 text-green-300'
               : status.state === 'connecting'
@@ -313,9 +346,9 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-col md:flex-row flex-1 md:overflow-hidden">
         {/* Sidebar */}
-        <aside className="w-72 border-r border-gray-800 flex flex-col gap-6 p-5">
+        <aside className="w-full md:w-72 border-b md:border-b-0 md:border-r border-gray-800 flex flex-col gap-6 p-5 md:shrink-0">
           {/* QR */}
           {status.state !== 'open' && (
             <div className="rounded-xl border border-gray-700 p-4 flex flex-col items-center gap-3">
@@ -367,14 +400,14 @@ export default function Dashboard() {
         </aside>
 
         {/* Main */}
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 flex flex-col min-h-0 md:overflow-hidden">
           {view === 'replies' ? (
           <>
             {/* Replies toolbar */}
-            <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-4">
-              <h2 className="text-lg font-semibold text-gray-100">Replies Inbox</h2>
-              <span className="text-sm text-gray-500">{interestedCount} interested · {replyCount} total</span>
-              <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 ml-auto">
+            <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 flex flex-wrap items-center gap-3">
+              <h2 className="text-base sm:text-lg font-semibold text-gray-100">Replies Inbox</h2>
+              <span className="text-xs sm:text-sm text-gray-500">{interestedCount} interested · {replyCount} total</span>
+              <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 w-full sm:w-auto sm:ml-auto overflow-x-auto">
                 {([
                   { key: 'all', label: 'All' },
                   { key: 'interested', label: 'Interested' },
@@ -396,7 +429,7 @@ export default function Dashboard() {
             </div>
 
             {/* Replies list */}
-            <div className="flex-1 overflow-auto p-6 flex flex-col gap-3">
+            <div className="flex-1 overflow-auto p-4 sm:p-6 flex flex-col gap-3">
               {visibleReplies.length === 0 && (
                 <div className="text-center text-gray-600 py-16">
                   {replyCount === 0 ? 'No replies yet. They appear here automatically when leads respond.' : 'No replies in this category.'}
@@ -426,7 +459,7 @@ export default function Dashboard() {
                       : 'border-gray-700 bg-gray-900/40'
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-4">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className="font-medium text-gray-100">{lead.name}</span>
@@ -479,7 +512,7 @@ export default function Dashboard() {
                         </div>
                       )}
                     </div>
-                    <div className="flex flex-col gap-2">
+                    <div className="flex flex-row sm:flex-col gap-2 shrink-0">
                       <a
                         href={`https://wa.me/${lead.phone.replace(/\D/g, '').length === 8 ? '65' + lead.phone.replace(/\D/g, '') : lead.phone.replace(/\D/g, '')}`}
                         target="_blank"
@@ -507,11 +540,11 @@ export default function Dashboard() {
           ) : (
           <>
           {/* Toolbar */}
-          <div className="px-6 py-4 border-b border-gray-800 flex items-center gap-4">
+          <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 flex flex-wrap items-center gap-2 sm:gap-4">
             <input
               type="text"
               placeholder="Search name, phone, email…"
-              className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-green-600"
+              className="w-full sm:flex-1 sm:w-auto bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-green-600"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -551,7 +584,7 @@ export default function Dashboard() {
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-gray-950 border-b border-gray-800">
                 <tr>
-                  <th className="px-4 py-3 text-left w-10">
+                  <th className="px-3 sm:px-4 py-3 text-left w-10">
                     <input
                       type="checkbox"
                       checked={visible.length > 0 && selected.size === visible.length}
@@ -559,13 +592,13 @@ export default function Dashboard() {
                       className="rounded accent-green-500"
                     />
                   </th>
-                  <th className="px-4 py-3 text-left text-gray-400 font-medium">#</th>
-                  <th className="px-4 py-3 text-left text-gray-400 font-medium">Name</th>
-                  <th className="px-4 py-3 text-left text-gray-400 font-medium">Phone</th>
-                  <th className="px-4 py-3 text-left text-gray-400 font-medium">Notes</th>
-                  <th className="px-4 py-3 text-left text-gray-400 font-medium">Replies</th>
-                  <th className="px-4 py-3 text-left text-gray-400 font-medium">Status</th>
-                  <th className="px-4 py-3 text-right text-gray-400 font-medium">Action</th>
+                  <th className="px-4 py-3 text-left text-gray-400 font-medium hidden sm:table-cell">#</th>
+                  <th className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium">Name</th>
+                  <th className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium">Phone</th>
+                  <th className="px-4 py-3 text-left text-gray-400 font-medium hidden md:table-cell">Notes</th>
+                  <th className="px-4 py-3 text-left text-gray-400 font-medium hidden sm:table-cell">Replies</th>
+                  <th className="px-4 py-3 text-left text-gray-400 font-medium hidden sm:table-cell">Status</th>
+                  <th className="px-3 sm:px-4 py-3 text-right text-gray-400 font-medium">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-900">
@@ -576,7 +609,7 @@ export default function Dashboard() {
                       selected.has(lead.id) ? 'bg-green-950/20' : 'hover:bg-gray-900/50'
                     }`}
                   >
-                    <td className="px-4 py-3">
+                    <td className="px-3 sm:px-4 py-3">
                       <input
                         type="checkbox"
                         checked={selected.has(lead.id)}
@@ -584,18 +617,18 @@ export default function Dashboard() {
                         className="rounded accent-green-500"
                       />
                     </td>
-                    <td className="px-4 py-3 text-gray-600 text-xs">{lead.id}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 text-gray-600 text-xs hidden sm:table-cell">{lead.id}</td>
+                    <td className="px-3 sm:px-4 py-3">
                       <div className="font-medium text-gray-100">{lead.name}</div>
-                      <div className="text-xs text-gray-500">{lead.email}</div>
+                      <div className="text-xs text-gray-500 truncate max-w-[160px] sm:max-w-none">{lead.email}</div>
                     </td>
-                    <td className="px-4 py-3 text-gray-300 font-mono text-xs">{lead.phone}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 sm:px-4 py-3 text-gray-300 font-mono text-xs whitespace-nowrap">{lead.phone}</td>
+                    <td className="px-4 py-3 hidden md:table-cell">
                       {lead.notes && (
                         <span className="text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded-full">{lead.notes}</span>
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 hidden sm:table-cell">
                       {lead.replies?.length > 0 ? (
                         <button
                           onClick={() => setExpandedId(expandedId === lead.id ? null : lead.id)}
@@ -607,7 +640,7 @@ export default function Dashboard() {
                         <span className="text-xs text-gray-700">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="px-4 py-3 hidden sm:table-cell">
                       {lead.sent ? (
                         <span className="inline-flex items-center gap-1 text-xs text-green-400">
                           <span>✓</span> Sent
@@ -616,7 +649,7 @@ export default function Dashboard() {
                         <span className="text-xs text-gray-600">—</span>
                       )}
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-3 sm:px-4 py-3 text-right">
                       {!lead.sent && (
                         <button
                           onClick={() => sendOne(lead)}

@@ -4,8 +4,9 @@ node_modules/
 # WhatsApp link session — host-specific, never commit
 server/sessions/
 
-# Live CRM data — server-managed, bind-mounted, seeded once (see leads.example.json)
+# Live CRM data + runtime config — server-managed, bind-mounted
 server/data/leads.json
+server/data/config.json
 
 # Secrets
 .env

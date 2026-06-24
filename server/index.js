@@ -15,6 +15,25 @@ import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LEADS_PATH = join(__dirname, 'data', 'leads.json');
+const CONFIG_PATH = join(__dirname, 'data', 'config.json');
+const KNOWLEDGE_PATH = join(__dirname, 'knowledge.md');
+
+// ── Knowledge base ──────────────────────────────────────────────────────────────
+// Loaded ONCE at startup (baked into the bot — never re-parsed per message).
+let KNOWLEDGE = '';
+try {
+  KNOWLEDGE = readFileSync(KNOWLEDGE_PATH, 'utf8');
+  console.log(`[kb] loaded knowledge base (${KNOWLEDGE.length} chars)`);
+} catch {
+  console.log('[kb] no knowledge.md found — replies will be generic');
+}
+
+// ── Config (auto-reply mode) ────────────────────────────────────────────────────
+function readConfig() {
+  try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); }
+  catch { return { autoReply: false }; }
+}
+function writeConfig(cfg) { writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2)); }
 
 // ── AI classifier (Claude) ─────────────────────────────────────────────────────
 // Falls back to keyword matching when ANTHROPIC_API_KEY is not set.
@@ -63,18 +82,26 @@ async function classifyReplies(name, replies) {
   const transcript = replies.map((r) => `- ${r.text}`).join('\n');
   if (!anthropic) return classifyKeyword(replies[replies.length - 1]?.text || '');
 
-  const prompt = `You are triaging WhatsApp replies for a recruitment/business-opportunity outreach campaign. We sent this contact a message asking if they're open to hearing about opportunities or extra income, and to reply "Interested" if so.
+  const system = `You are the WhatsApp assistant for a Pet Afterlife SG recruitment outreach. We message contacts asking if they're open to a flexible-income opportunity and to reply "Interested".
 
-Contact name: ${name}
+Your job: classify each contact's reply, and draft a SHORT, warm, factual reply we can send back — grounded ONLY in the knowledge base below. Never invent prices, commission rates, dates, or commitments. If they're interested or asking to learn more, invite them to a briefing session (Thursday 7:30pm or Sunday 2pm) and ask which suits them. Keep replies concise and natural for WhatsApp (1-4 sentences). This is emotionally sensitive work — be calm and never pushy.
+
+=== KNOWLEDGE BASE ===
+${KNOWLEDGE}
+=== END KNOWLEDGE BASE ===`;
+
+  const prompt = `Contact name: ${name}
 Their reply/replies:
 ${transcript}
 
-Classify their response and draft a short, warm reply we could send back. Be concise.`;
+Classify their response and draft the reply to send back.`;
 
   try {
     const res = await anthropic.messages.create({
       model: AI_MODEL,
       max_tokens: 1024,
+      // Cache the system+knowledge prefix so it isn't re-billed every message
+      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
       output_config: { format: { type: 'json_schema', schema: CLASSIFY_SCHEMA } },
       messages: [{ role: 'user', content: prompt }],
     });
@@ -187,10 +214,32 @@ async function connectWA() {
       const ai = await classifyReplies(lead.name, lead.replies);
       const fresh = readLeads();
       const target = fresh.find((l) => l.id === lead.id);
-      if (target) {
-        target.ai = { ...ai, classifiedAt: new Date().toISOString() };
-        saveLeads(fresh);
-        console.log(`[ai] ${lead.name}: ${ai.category} (${ai.confidence})`);
+      if (!target) continue;
+      target.ai = { ...ai, classifiedAt: new Date().toISOString() };
+      saveLeads(fresh);
+      console.log(`[ai] ${lead.name}: ${ai.category} (${ai.confidence})`);
+
+      // Auto-reply: if bot mode is ON, send the knowledge-grounded reply back.
+      if (readConfig().autoReply && ai.suggested_reply && text !== '[media]') {
+        const jid = toJid(lead.phone);
+        if (jid) {
+          // small human-like delay before replying
+          await new Promise((r) => setTimeout(r, 3000 + Math.floor(Math.random() * 4000)));
+          try {
+            await sock.sendMessage(jid, { text: ai.suggested_reply });
+            const f2 = readLeads();
+            const t2 = f2.find((l) => l.id === lead.id);
+            if (t2) {
+              if (!t2.sentReplies) t2.sentReplies = [];
+              t2.sentReplies.push({ text: ai.suggested_reply, timestamp: new Date().toISOString(), auto: true });
+              if (t2.ai) t2.ai.autoReplied = true;
+              saveLeads(f2);
+            }
+            console.log(`[auto-reply] ${lead.name}: ${ai.suggested_reply.slice(0, 50)}`);
+          } catch (err) {
+            console.error('[auto-reply] failed:', err.message);
+          }
+        }
       }
     }
   });
@@ -241,7 +290,15 @@ app.use(express.json());
 
 // Status + QR
 app.get('/api/status', (_req, res) => {
-  res.json({ state: connectionState, qr: currentQR, ai: !!anthropic });
+  res.json({ state: connectionState, qr: currentQR, ai: !!anthropic, autoReply: readConfig().autoReply });
+});
+
+// Toggle auto-reply (bot) mode on/off
+app.post('/api/autoreply', (req, res) => {
+  const enabled = !!req.body.enabled;
+  writeConfig({ ...readConfig(), autoReply: enabled });
+  console.log(`[config] auto-reply ${enabled ? 'ENABLED' : 'DISABLED'}`);
+  res.json({ ok: true, autoReply: enabled });
 });
 
 // Classify all leads with replies that haven't been classified yet
