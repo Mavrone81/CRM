@@ -277,6 +277,22 @@ export default function Dashboard() {
     router.refresh();
   };
 
+  const [showWa, setShowWa] = useState(false);
+  const [relinking, setRelinking] = useState(false);
+
+  // Disconnect the current WhatsApp number so a new one can be linked (fresh QR).
+  const relinkWa = async () => {
+    if (!confirm('Disconnect the current WhatsApp number and link a different one? You will scan a fresh QR code to connect the new number.')) return;
+    setRelinking(true);
+    try {
+      const r = await fetch(`${API}/logout`, { method: 'POST' });
+      const d = await r.json();
+      if (d.ok) { showToast('Disconnected — scan the new QR to link a number'); fetchStatus(); }
+      else showToast(d.error || 'Failed to disconnect', false);
+    } catch { showToast('Network error', false); }
+    finally { setRelinking(false); }
+  };
+
   // Update a lead's pipeline stage straight from the Leads table.
   const updateStage = async (id: number, value: string) => {
     const stage = value === 'inbox' ? null : value;
@@ -366,7 +382,10 @@ export default function Dashboard() {
               <span className="sm:hidden">{status.autoReply ? 'Auto' : 'Man'}</span>
             </button>
           )}
-          <span className={`inline-flex items-center gap-2 text-xs sm:text-sm font-medium px-3 py-1.5 rounded-full border ${
+          <button
+            onClick={() => setShowWa(true)}
+            title="Manage WhatsApp connection"
+            className={`inline-flex items-center gap-2 text-xs sm:text-sm font-medium px-3 py-1.5 rounded-full border cursor-pointer hover:opacity-80 transition-opacity ${
             status.state === 'open'
               ? 'bg-green-950 border-green-700 text-green-300'
               : status.state === 'connecting'
@@ -377,7 +396,7 @@ export default function Dashboard() {
               status.state === 'open' ? 'bg-green-400' : status.state === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-gray-600'
             }`} />
             {status.state === 'open' ? 'Connected' : status.state === 'connecting' ? 'Scan QR' : 'Disconnected'}
-          </span>
+          </button>
           <button
             onClick={logout}
             title="Sign out"
@@ -823,6 +842,47 @@ export default function Dashboard() {
               >
                 {addSaving ? 'Saving…' : 'Add Lead'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* WhatsApp connection manager */}
+      {showWa && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setShowWa(false)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-100">WhatsApp connection</h2>
+              <button onClick={() => setShowWa(false)} className="text-gray-500 hover:text-gray-200">✕</button>
+            </div>
+            <div className="flex flex-col items-center gap-4">
+              <span className={`inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border ${
+                status.state === 'open' ? 'bg-green-950 border-green-700 text-green-300'
+                : status.state === 'connecting' ? 'bg-yellow-950 border-yellow-700 text-yellow-300'
+                : 'bg-gray-900 border-gray-700 text-gray-400'}`}>
+                <span className={`w-2 h-2 rounded-full ${status.state === 'open' ? 'bg-green-400' : status.state === 'connecting' ? 'bg-yellow-400 animate-pulse' : 'bg-gray-600'}`} />
+                {status.state === 'open' ? 'Connected' : status.state === 'connecting' ? 'Awaiting scan' : 'Disconnected'}
+              </span>
+
+              {status.state === 'open' ? (
+                <>
+                  <p className="text-sm text-gray-400 text-center">A number is linked and active. To switch to a different number, disconnect and scan a fresh QR.</p>
+                  <button onClick={relinkWa} disabled={relinking}
+                    className="w-full bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-lg transition-colors">
+                    {relinking ? 'Disconnecting…' : 'Link a different number'}
+                  </button>
+                </>
+              ) : status.qr ? (
+                <>
+                  <p className="text-sm text-gray-400 text-center">Open WhatsApp → <b>Linked devices</b> → <b>Link a device</b>, then scan:</p>
+                  <img src={status.qr} alt="WhatsApp QR" className="w-56 h-56 rounded-lg bg-white p-1" />
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-gray-400 text-center">Generating a QR code…</p>
+                  <div className="w-56 h-56 bg-gray-800 rounded-lg animate-pulse" />
+                </>
+              )}
             </div>
           </div>
         </div>

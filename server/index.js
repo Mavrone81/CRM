@@ -737,12 +737,15 @@ app.post('/api/send/:id', async (req, res) => {
   }
 });
 
-// Logout (delete session)
+// Logout + unlink: clears the stored session so the reconnect shows a fresh QR
+// to link a different number. (The connection.update handler does the reconnect.)
 app.post('/api/logout', async (_req, res) => {
-  if (sock) {
-    await sock.logout().catch(() => {});
-    sock = null;
-  }
+  try { if (sock) await sock.logout().catch(() => {}); } catch {}
+  try {
+    const dir = join(__dirname, 'sessions');
+    for (const f of readdirSync(dir)) rmSync(join(dir, f), { recursive: true, force: true });
+  } catch {}
+  sock = null;
   connectionState = 'close';
   currentQR = null;
   res.json({ ok: true });
