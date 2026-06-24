@@ -52,6 +52,8 @@ export default function Dashboard() {
   const [addSaving, setAddSaving] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [classifying, setClassifying] = useState<Set<number>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [collapseAll, setCollapseAll] = useState(false);
   const [view, setView] = useState<'leads' | 'replies'>('leads');
   const [replyFilter, setReplyFilter] = useState<'all' | 'interested' | 'not' | 'question' | 'other'>('all');
 
@@ -407,6 +409,17 @@ export default function Dashboard() {
             <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 flex flex-wrap items-center gap-3">
               <h2 className="text-base sm:text-lg font-semibold text-gray-100">Replies Inbox</h2>
               <span className="text-xs sm:text-sm text-gray-500">{interestedCount} interested · {replyCount} total</span>
+              {visibleReplies.length > 0 && (
+                <button
+                  onClick={() => {
+                    const allCollapsed = visibleReplies.every((r) => collapsed.has(r.lead.id));
+                    setCollapsed(allCollapsed ? new Set() : new Set(visibleReplies.map((r) => r.lead.id)));
+                  }}
+                  className="text-xs sm:text-sm font-medium px-3 py-1.5 rounded-lg border bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200 whitespace-nowrap"
+                >
+                  {visibleReplies.every((r) => collapsed.has(r.lead.id)) ? 'Expand all' : 'Collapse all'}
+                </button>
+              )}
               <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 w-full sm:w-auto sm:ml-auto overflow-x-auto">
                 {([
                   { key: 'all', label: 'All' },
@@ -446,6 +459,10 @@ export default function Dashboard() {
                   : category === 'not' ? 'bg-red-900 text-red-300'
                   : category === 'question' ? 'bg-yellow-900 text-yellow-300'
                   : 'bg-gray-800 text-gray-400';
+                const isCollapsed = collapsed.has(lead.id);
+                const toggleCollapse = () => setCollapsed((p) => {
+                  const n = new Set(p); n.has(lead.id) ? n.delete(lead.id) : n.add(lead.id); return n;
+                });
                 return (
                 <div
                   key={lead.id}
@@ -462,7 +479,14 @@ export default function Dashboard() {
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span className="font-medium text-gray-100">{lead.name}</span>
+                        <button
+                          onClick={toggleCollapse}
+                          className="text-gray-500 hover:text-gray-200 text-xs w-4 shrink-0"
+                          title={isCollapsed ? 'Expand' : 'Collapse'}
+                        >
+                          {isCollapsed ? '▸' : '▾'}
+                        </button>
+                        <span className="font-medium text-gray-100 cursor-pointer" onClick={toggleCollapse}>{lead.name}</span>
                         <span className="text-xs text-gray-500 font-mono">{lead.phone}</span>
                         <span className={`text-xs px-2 py-0.5 rounded-full ${catChip}`}>{catLabel}</span>
                         {lead.ai ? (
@@ -478,10 +502,14 @@ export default function Dashboard() {
                             {classifying.has(lead.id) ? 'Analysing…' : 'Classify with AI'}
                           </button>
                         )}
+                        {isCollapsed && lead.replies.length > 0 && (
+                          <span className="text-xs text-gray-500 truncate max-w-[180px]">— {lead.replies[lead.replies.length - 1].text}</span>
+                        )}
                       </div>
-                      {lead.ai?.reason && (
+                      {!isCollapsed && lead.ai?.reason && (
                         <p className="text-xs text-gray-400 mb-2 italic">{lead.ai.reason}</p>
                       )}
+                      {!isCollapsed && (
                       <div className="flex flex-col gap-1.5 mt-2">
                         {lead.replies.map((r, i) => (
                           <div key={i} className="flex items-start gap-2 text-sm">
@@ -492,7 +520,8 @@ export default function Dashboard() {
                           </div>
                         ))}
                       </div>
-                      {lead.ai?.suggested_reply && (
+                      )}
+                      {!isCollapsed && lead.ai?.suggested_reply && (
                         <div className="mt-3 flex items-start gap-2 bg-gray-950/60 border border-gray-800 rounded-lg p-2.5">
                           <span className="text-xs text-purple-300 mt-0.5 whitespace-nowrap">Suggested:</span>
                           <span className="text-sm text-gray-300 flex-1">{lead.ai.suggested_reply}</span>
