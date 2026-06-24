@@ -2,13 +2,9 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import type { Lead, WaStatus, Config, DocMeta, Stage, Session } from './types';
+import { sessionDisplay } from './types';
 
-const fmtDate = (d?: string) => {
-  if (!d) return '';
-  const dt = new Date(d + 'T00:00:00');
-  return isNaN(dt.getTime()) ? d : dt.toLocaleDateString('en-SG', { weekday: 'short', day: 'numeric', month: 'short' });
-};
-const sessionText = (s: Session) => (s.date ? `${s.label} · ${fmtDate(s.date)}` : s.label);
+const sessionText = (s: Session) => sessionDisplay(s);
 
 const API = '/api/proxy';
 
@@ -113,8 +109,10 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
   // Count people already assigned to each session (slotted onward).
   const sessionCounts: Record<string, number> = {};
   leads.forEach((l) => {
-    if (l.wf?.session && ['slotted', 'attended', 'agreement_sent'].includes(l.stage || ''))
+    if (l.wf?.session && ['slotted', 'attended', 'agreement_sent', 'onboarding', 'onboarding_slotted', 'onboarded'].includes(l.stage || ''))
       sessionCounts[l.wf.session] = (sessionCounts[l.wf.session] || 0) + 1;
+    if (l.wf?.onboardingSession && ['onboarding_slotted', 'onboarded'].includes(l.stage || ''))
+      sessionCounts[l.wf.onboardingSession] = (sessionCounts[l.wf.onboardingSession] || 0) + 1;
   });
 
   const lastReply = (l: Lead) => l.replies?.[l.replies.length - 1];
@@ -358,6 +356,7 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
           config={config} docs={docs}
           showToast={showToast}
           onConfigSaved={loadConfig} onDocsChanged={loadDocs}
+          sessionCount={(id) => sessionCounts[id] || 0}
         />
       )}
     </div>
@@ -365,7 +364,7 @@ export default function Pipeline({ leads, status, showToast, refresh }: Props) {
 }
 
 // ── Settings modal (Brief template / Sessions / Documents) ─────────────────────────
-function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsChanged }: {
+function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsChanged, sessionCount }: {
   tab: 'brief' | 'sessions' | 'onboarding' | 'documents';
   setTab: (t: null | 'brief' | 'sessions' | 'onboarding' | 'documents') => void;
   config: Config | null;
@@ -373,6 +372,7 @@ function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsC
   showToast: (m: string, ok?: boolean) => void;
   onConfigSaved: () => void;
   onDocsChanged: () => void;
+  sessionCount: (id: string) => number;
 }) {
   const [briefDraft, setBriefDraft] = useState(config?.briefTemplate || '');
   const [sessionsDraft, setSessionsDraft] = useState<Session[]>(config?.sessions || []);
@@ -440,21 +440,27 @@ function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsC
 
           {tab === 'sessions' && (
             <div className="flex flex-col gap-3">
-              <label className="text-xs text-gray-400">Briefing sessions leads can be slotted into — the date is included in the invite sent to leads</label>
+              <label className="text-xs text-gray-400">Briefing sessions — pick a date + time; the day and label are derived automatically. Booked count is live.</label>
+              <div className="flex gap-2 px-1 text-[11px] text-gray-600">
+                <span className="w-40">Date</span><span className="w-28">Time</span><span className="w-16">Cap</span>
+              </div>
               {sessionsDraft.map((s, i) => (
-                <div key={i} className="flex gap-2 items-center flex-wrap sm:flex-nowrap">
-                  <input value={s.label} onChange={(e) => setSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, label: e.target.value } : x))}
-                    className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" placeholder="Label e.g. Thursday 7:30pm" />
-                  <input type="date" value={s.date || ''} onChange={(e) => setSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, date: e.target.value } : x))}
-                    className="w-36 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
-                  <input type="number" value={s.capacity} title="Capacity" onChange={(e) => setSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, capacity: Number(e.target.value) } : x))}
-                    className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
-                  <button onClick={() => setSessionsDraft((d) => d.filter((_, j) => j !== i))} className="text-gray-500 hover:text-red-400 px-2">✕</button>
+                <div key={i} className="flex flex-col gap-1 border border-gray-800 rounded-lg p-2">
+                  <div className="flex gap-2 items-center flex-wrap sm:flex-nowrap">
+                    <input type="date" value={s.date || ''} onChange={(e) => setSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, date: e.target.value } : x))}
+                      className="w-40 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                    <input type="time" value={s.time || ''} onChange={(e) => setSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, time: e.target.value } : x))}
+                      className="w-28 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                    <input type="number" min={1} value={s.capacity} title="Capacity" onChange={(e) => setSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, capacity: Number(e.target.value) } : x))}
+                      className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                    <button onClick={() => setSessionsDraft((d) => d.filter((_, j) => j !== i))} className="text-gray-500 hover:text-red-400 px-2">✕</button>
+                  </div>
+                  <span className="text-xs text-gray-400 pl-1">→ {sessionDisplay(s)} · <span className="text-green-300">{sessionCount(s.id)}/{s.capacity}</span> booked</span>
                 </div>
               ))}
-              <button onClick={() => setSessionsDraft((d) => [...d, { id: `s${Date.now()}`, label: '', date: '', capacity: 10 }])}
+              <button onClick={() => setSessionsDraft((d) => [...d, { id: `s${Date.now()}`, date: '', time: '', capacity: 10 }])}
                 className="text-sm text-gray-400 hover:text-gray-200 self-start">+ Add session</button>
-              <button onClick={() => saveConfig({ sessions: sessionsDraft.filter((s) => s.label.trim()) }, 'Sessions saved')} disabled={saving}
+              <button onClick={() => saveConfig({ sessions: sessionsDraft.filter((s) => s.date || s.label?.trim()) }, 'Sessions saved')} disabled={saving}
                 className="self-end bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg">
                 {saving ? 'Saving…' : 'Save'}
               </button>
@@ -466,17 +472,20 @@ function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsC
               <div className="flex flex-col gap-2">
                 <label className="text-xs text-gray-400">Onboarding (2nd) sessions — offered automatically once the agreement is signed</label>
                 {obSessionsDraft.map((s, i) => (
-                  <div key={i} className="flex gap-2 items-center flex-wrap sm:flex-nowrap">
-                    <input value={s.label} onChange={(e) => setObSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, label: e.target.value } : x))}
-                      className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" placeholder="Label e.g. Onboarding — Mon 7pm" />
-                    <input type="date" value={s.date || ''} onChange={(e) => setObSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, date: e.target.value } : x))}
-                      className="w-36 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
-                    <input type="number" value={s.capacity} title="Capacity" onChange={(e) => setObSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, capacity: Number(e.target.value) } : x))}
-                      className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
-                    <button onClick={() => setObSessionsDraft((d) => d.filter((_, j) => j !== i))} className="text-gray-500 hover:text-red-400 px-2">✕</button>
+                  <div key={i} className="flex flex-col gap-1 border border-gray-800 rounded-lg p-2">
+                    <div className="flex gap-2 items-center flex-wrap sm:flex-nowrap">
+                      <input type="date" value={s.date || ''} onChange={(e) => setObSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, date: e.target.value } : x))}
+                        className="w-40 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                      <input type="time" value={s.time || ''} onChange={(e) => setObSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, time: e.target.value } : x))}
+                        className="w-28 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                      <input type="number" min={1} value={s.capacity} title="Capacity" onChange={(e) => setObSessionsDraft((d) => d.map((x, j) => j === i ? { ...x, capacity: Number(e.target.value) } : x))}
+                        className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                      <button onClick={() => setObSessionsDraft((d) => d.filter((_, j) => j !== i))} className="text-gray-500 hover:text-red-400 px-2">✕</button>
+                    </div>
+                    <span className="text-xs text-gray-400 pl-1">→ {sessionDisplay(s)} · <span className="text-emerald-300">{sessionCount(s.id)}/{s.capacity}</span> booked</span>
                   </div>
                 ))}
-                <button onClick={() => setObSessionsDraft((d) => [...d, { id: `ob${Date.now()}`, label: '', date: '', capacity: 10 }])}
+                <button onClick={() => setObSessionsDraft((d) => [...d, { id: `ob${Date.now()}`, date: '', time: '', capacity: 10 }])}
                   className="text-sm text-gray-400 hover:text-gray-200 self-start">+ Add onboarding session</button>
               </div>
 
@@ -500,7 +509,7 @@ function Settings({ tab, setTab, config, docs, showToast, onConfigSaved, onDocsC
 
               <button
                 onClick={() => saveConfig({
-                  onboardingSessions: obSessionsDraft.filter((s) => s.label.trim()),
+                  onboardingSessions: obSessionsDraft.filter((s) => s.date || s.label?.trim()),
                   requiredFields: requiredDraft.split('\n').map((x) => x.trim()).filter(Boolean),
                   chaseTemplate: chaseDraft,
                   onboardingTemplate: obTemplateDraft,

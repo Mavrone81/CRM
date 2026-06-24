@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import type { Lead, Config } from './types';
+import { sessionDisplay } from './types';
 
 const API = '/api/proxy';
 
@@ -59,7 +60,7 @@ export default function Analytics({ leads }: { leads: Lead[] }) {
   ];
 
   const sessionFill = (config?.sessions || []).map((s) => ({
-    label: s.label + (s.date ? ` · ${s.date}` : ''),
+    label: sessionDisplay(s),
     n: leads.filter((l) => l.wf?.session === s.id && rankOf(l) >= 3).length,
     cap: s.capacity,
   }));

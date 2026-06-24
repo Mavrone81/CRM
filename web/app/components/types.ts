@@ -68,7 +68,32 @@ export type Lead = {
 
 export type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean; autoReply?: boolean };
 
-export type Session = { id: string; label: string; date?: string; capacity: number };
+// A session is defined by a calendar date + time; the weekday + 12h label are derived.
+// `label` is kept optional for backward-compat with older free-text sessions.
+export type Session = { id: string; date?: string; time?: string; capacity: number; label?: string };
+
+export function sessionTime12h(time?: string): string {
+  if (!time) return '';
+  const [h, m] = time.split(':').map(Number);
+  if (isNaN(h)) return time;
+  const ap = h >= 12 ? 'pm' : 'am';
+  const h12 = ((h + 11) % 12) + 1;
+  return `${h12}:${String(m || 0).padStart(2, '0')}${ap}`;
+}
+
+export function sessionWeekday(date?: string, long = false): string {
+  if (!date) return '';
+  const dt = new Date(date + 'T00:00:00');
+  return isNaN(dt.getTime()) ? '' : dt.toLocaleDateString('en-SG', { weekday: long ? 'long' : 'short' });
+}
+
+// Human display: "Thu 7:30pm · 26 Jun" derived from date+time (falls back to legacy label).
+export function sessionDisplay(s: { date?: string; time?: string; label?: string }): string {
+  const main = [sessionWeekday(s.date), sessionTime12h(s.time)].filter(Boolean).join(' ');
+  if (!main) return s.label || '(unset)';
+  const dm = s.date ? new Date(s.date + 'T00:00:00').toLocaleDateString('en-SG', { day: 'numeric', month: 'short' }) : '';
+  return dm ? `${main} · ${dm}` : main;
+}
 
 export type DocMeta = { id: string; name: string; mimetype: string; size: number; uploadedAt: string; isDefault: boolean };
 

@@ -63,8 +63,7 @@ const CONFIG_DEFAULTS = {
   requiredFields: [
     'Full name (as in NRIC)', 'NRIC number', 'Nationality', 'Date of birth',
     'Gender', 'Marital status', 'Home address', 'Mobile number',
-    'Commencement date', 'Emergency contact name', 'Emergency contact relationship',
-    'Emergency contact number', "Associate's signature",
+    'Commencement date', "Associate's signature",
   ],
   // Auto-reply when the returned signed agreement is missing fields. [Missing] -> bullet list.
   chaseTemplate:
