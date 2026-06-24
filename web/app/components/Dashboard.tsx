@@ -2,32 +2,9 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Pipeline from './Pipeline';
 
-type Reply = { text: string; timestamp: string };
-
-type AiResult = {
-  category: 'interested' | 'not_interested' | 'question' | 'other';
-  confidence: 'high' | 'medium' | 'low';
-  reason: string;
-  suggested_reply: string;
-  classifiedAt: string;
-};
-
-type Lead = {
-  id: number;
-  name: string;
-  email: string;
-  phone: string;
-  created: string;
-  notes: string;
-  adviser: string;
-  sent: boolean;
-  sentAt: string | null;
-  replies: Reply[];
-  ai?: AiResult;
-};
-
-type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean; autoReply?: boolean };
+import type { AiResult, Lead, WaStatus } from './types';
 
 const DEFAULT_TEMPLATE = `Hi [Name], We connected previously regarding a business/career opportunity, but I recently switched to WhatsApp Business and lost my chat history.
 
@@ -56,7 +33,7 @@ export default function Dashboard() {
   const [classifying, setClassifying] = useState<Set<number>>(new Set());
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
   const [collapseAll, setCollapseAll] = useState(false);
-  const [view, setView] = useState<'leads' | 'replies'>('leads');
+  const [view, setView] = useState<'leads' | 'replies' | 'pipeline'>('leads');
   const [replyFilter, setReplyFilter] = useState<'all' | 'interested' | 'not' | 'question' | 'other'>('all');
 
   const showToast = (msg: string, ok = true) => {
@@ -266,6 +243,12 @@ export default function Dashboard() {
 
   const sentCount = leads.filter((l) => l.sent).length;
 
+  const pipelineCount = leads.filter((l) => {
+    const s = l.stage;
+    if (s && s !== 'declined') return ['brief', 'confirmed', 'slotted', 'attended', 'agreement_sent'].includes(s);
+    return !s && l.ai?.category === 'interested';
+  }).length;
+
   const toggleBot = async () => {
     const next = !status.autoReply;
     try {
@@ -323,6 +306,19 @@ export default function Dashboard() {
                 </span>
               )}
             </button>
+            <button
+              onClick={() => setView('pipeline')}
+              className={`px-3 py-1 rounded text-sm transition-colors inline-flex items-center gap-1.5 ${
+                view === 'pipeline' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              Pipeline
+              {pipelineCount > 0 && (
+                <span className="bg-purple-600 text-white text-xs px-1.5 py-0.5 rounded-full min-w-5 text-center">
+                  {pipelineCount}
+                </span>
+              )}
+            </button>
           </div>
         </div>
 
@@ -366,7 +362,8 @@ export default function Dashboard() {
       </header>
 
       <div className="flex flex-col md:flex-row flex-1 md:overflow-hidden">
-        {/* Sidebar */}
+        {/* Sidebar (hidden on the pipeline board, which needs the full width) */}
+        {view !== 'pipeline' && (
         <aside className="w-full md:w-72 border-b md:border-b-0 md:border-r border-gray-800 flex flex-col gap-6 p-5 md:shrink-0">
           {/* QR */}
           {status.state !== 'open' && (
@@ -417,10 +414,13 @@ export default function Dashboard() {
             </div>
           )}
         </aside>
+        )}
 
         {/* Main */}
         <main className="flex-1 flex flex-col min-h-0 md:overflow-hidden">
-          {view === 'replies' ? (
+          {view === 'pipeline' ? (
+            <Pipeline leads={leads} status={status} showToast={showToast} refresh={fetchLeads} />
+          ) : view === 'replies' ? (
           <>
             {/* Replies toolbar */}
             <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 flex flex-wrap items-center gap-3">

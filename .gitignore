@@ -12,3 +12,7 @@ server/data/config.json
 .env
 .env.local
 *.log
+
+# Uploaded documents (agreements etc.) — server-managed, bind-mounted, never commit
+server/data/documents/
+server/data/documents.json

@@ -3,7 +3,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
 } from '@whiskeysockets/baileys';
-import { rmSync, readdirSync } from 'fs';
+import { rmSync, readdirSync, mkdirSync, existsSync, unlinkSync } from 'fs';
 import pino from 'pino';
 import express from 'express';
 import cors from 'cors';
@@ -17,6 +17,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const LEADS_PATH = join(__dirname, 'data', 'leads.json');
 const CONFIG_PATH = join(__dirname, 'data', 'config.json');
 const KNOWLEDGE_PATH = join(__dirname, 'knowledge.md');
+const DOCS_DIR = join(__dirname, 'data', 'documents');
+const DOCS_META_PATH = join(__dirname, 'data', 'documents.json');
+if (!existsSync(DOCS_DIR)) mkdirSync(DOCS_DIR, { recursive: true });
+
+// ── Recruitment pipeline stages (ordered) ───────────────────────────────────────
+// A lead with no `stage` lives only in the Leads/Replies inbox. When the interest
+// classifier tags it "interested" it is auto-surfaced into the first stage, 'brief'.
+const STAGES = ['brief', 'confirmed', 'slotted', 'attended', 'agreement_sent'];
 
 // ── Knowledge base ──────────────────────────────────────────────────────────────
 // Loaded ONCE at startup (baked into the bot — never re-parsed per message).
@@ -28,12 +36,30 @@ try {
   console.log('[kb] no knowledge.md found — replies will be generic');
 }
 
-// ── Config (auto-reply mode) ────────────────────────────────────────────────────
+// ── Config (auto-reply mode, sessions, brief template) ──────────────────────────
+const CONFIG_DEFAULTS = {
+  autoReply: false,
+  // Briefing sessions an attendee can be slotted into (editable from the UI).
+  sessions: [
+    { id: 'thu', label: 'Thursday 7:30pm', capacity: 10 },
+    { id: 'sun', label: 'Sunday 2:00pm', capacity: 10 },
+  ],
+  // Default personalised invite for the Brief stage. [Name] -> the lead's name.
+  briefTemplate:
+    "Hi [Name], great to hear you're keen! We'd love to have you at our recruitment briefing.\n\nWe run sessions on Thursday 7:30pm and Sunday 2pm. Which one suits you better? Once you confirm I'll reserve your spot.",
+};
 function readConfig() {
-  try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); }
-  catch { return { autoReply: false }; }
+  let saved = {};
+  try { saved = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); } catch {}
+  return { ...CONFIG_DEFAULTS, ...saved };
 }
 function writeConfig(cfg) { writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2)); }
+
+// ── Documents (uploadable agreements etc.) ───────────────────────────────────────
+function readDocs() {
+  try { return JSON.parse(readFileSync(DOCS_META_PATH, 'utf8')); } catch { return []; }
+}
+function saveDocs(docs) { writeFileSync(DOCS_META_PATH, JSON.stringify(docs, null, 2)); }
 
 // ── AI classifier (Claude) ─────────────────────────────────────────────────────
 // Falls back to keyword matching when ANTHROPIC_API_KEY is not set.
@@ -110,6 +136,57 @@ Classify their response and draft the reply to send back.`;
   } catch (err) {
     console.error('[ai] classify failed, falling back:', err.message);
     return classifyKeyword(replies[replies.length - 1]?.text || '');
+  }
+}
+
+// ── Attendance classifier ───────────────────────────────────────────────────────
+// Runs on replies AFTER a brief invite has been sent. Decides whether the contact
+// confirmed they'll attend the briefing, declined, or it's still unclear.
+const ATTEND_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['confirmed', 'declined', 'unclear'], description: 'Whether they confirmed attendance at the briefing' },
+    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+    reason: { type: 'string', description: 'One short sentence explaining the decision, noting any session/timing preference they mentioned' },
+  },
+  required: ['status', 'confidence', 'reason'],
+  additionalProperties: false,
+};
+
+function attendKeyword(text) {
+  const t = (text || '').toLowerCase();
+  if (/\b(can'?t|cannot|can not|not able|unable|busy|not interested|maybe not|reschedule|another time|next time)\b/.test(t) || /^\s*no\b/.test(t))
+    return { status: 'declined', confidence: 'low', reason: 'Keyword match (no API key set)' };
+  if (/\b(yes|yep|yeah|confirm|confirmed|coming|i'?m in|attend|see you|sure|ok|okay|thursday|sunday|thu|sun)\b/.test(t))
+    return { status: 'confirmed', confidence: 'low', reason: 'Keyword match (no API key set)' };
+  return { status: 'unclear', confidence: 'low', reason: 'No clear confirmation keyword (no API key set)' };
+}
+
+async function classifyAttendance(name, replies) {
+  const last = replies[replies.length - 1]?.text || '';
+  if (!anthropic) return attendKeyword(last);
+
+  const transcript = replies.map((r) => `- ${r.text}`).join('\n');
+  const system = `You manage attendance for a recruitment briefing. Invited contacts were asked to confirm whether they'll attend a session (Thursday 7:30pm or Sunday 2pm). Read the contact's replies and decide if they have CONFIRMED they'll attend, DECLINED, or it's still UNCLEAR. Note any session/timing preference in your reason.`;
+  const prompt = `Contact name: ${name}
+Their replies (most recent last):
+${transcript}
+
+Classify their attendance.`;
+
+  try {
+    const res = await anthropic.messages.create({
+      model: AI_MODEL,
+      max_tokens: 256,
+      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+      output_config: { format: { type: 'json_schema', schema: ATTEND_SCHEMA } },
+      messages: [{ role: 'user', content: prompt }],
+    });
+    const text = res.content.find((b) => b.type === 'text')?.text || '{}';
+    return JSON.parse(text);
+  } catch (err) {
+    console.error('[ai] attendance classify failed, falling back:', err.message);
+    return attendKeyword(last);
   }
 }
 
@@ -210,34 +287,55 @@ async function connectWA() {
       saveLeads(leads);
       console.log(`[reply] ${lead.name}: ${text}`);
 
-      // Classify with AI (re-read + save to avoid stomping concurrent writes)
-      const ai = await classifyReplies(lead.name, lead.replies);
+      // Re-read fresh to avoid stomping concurrent writes.
       const fresh = readLeads();
       const target = fresh.find((l) => l.id === lead.id);
       if (!target) continue;
-      target.ai = { ...ai, classifiedAt: new Date().toISOString() };
-      saveLeads(fresh);
-      console.log(`[ai] ${lead.name}: ${ai.category} (${ai.confidence})`);
+      const now = () => new Date().toISOString();
+      const invited = target.stage === 'brief' && target.wf?.invitedAt;
 
-      // Auto-reply: if bot mode is ON, send the knowledge-grounded reply back.
-      if (readConfig().autoReply && ai.suggested_reply && text !== '[media]') {
-        const jid = toJid(lead.phone);
-        if (jid) {
-          // small human-like delay before replying
-          await new Promise((r) => setTimeout(r, 3000 + Math.floor(Math.random() * 4000)));
-          try {
-            await sock.sendMessage(jid, { text: ai.suggested_reply });
-            const f2 = readLeads();
-            const t2 = f2.find((l) => l.id === lead.id);
-            if (t2) {
-              if (!t2.sentReplies) t2.sentReplies = [];
-              t2.sentReplies.push({ text: ai.suggested_reply, timestamp: new Date().toISOString(), auto: true });
-              if (t2.ai) t2.ai.autoReplied = true;
-              saveLeads(f2);
+      if (invited) {
+        // Already invited to the briefing — classify whether they confirmed attendance.
+        const att = await classifyAttendance(target.name, target.replies);
+        target.wf = { ...(target.wf || {}), confirmation: { ...att, detectedAt: now() } };
+        saveLeads(fresh);
+        console.log(`[attend] ${target.name}: ${att.status} (${att.confidence})`);
+        // No auto-reply once invited — attendance confirmation is approved by a human.
+      } else if (target.stage && target.stage !== 'brief') {
+        // Past the brief stage — just keep the reply, no re-classification.
+        saveLeads(fresh);
+      } else {
+        // Inbox stage: interest classification, auto-surfacing interested leads to 'brief'.
+        const ai = await classifyReplies(target.name, target.replies);
+        target.ai = { ...ai, classifiedAt: now() };
+        if (ai.category === 'interested' && !target.stage) {
+          target.stage = 'brief';
+          target.wf = { ...(target.wf || {}), enteredAt: now() };
+          console.log(`[pipeline] ${target.name} -> brief (interested)`);
+        }
+        saveLeads(fresh);
+        console.log(`[ai] ${target.name}: ${ai.category} (${ai.confidence})`);
+
+        // Auto-reply: if bot mode is ON, send the knowledge-grounded reply back.
+        if (readConfig().autoReply && ai.suggested_reply && text !== '[media]') {
+          const jid = toJid(target.phone);
+          if (jid) {
+            // small human-like delay before replying
+            await new Promise((r) => setTimeout(r, 3000 + Math.floor(Math.random() * 4000)));
+            try {
+              await sock.sendMessage(jid, { text: ai.suggested_reply });
+              const f2 = readLeads();
+              const t2 = f2.find((l) => l.id === target.id);
+              if (t2) {
+                if (!t2.sentReplies) t2.sentReplies = [];
+                t2.sentReplies.push({ text: ai.suggested_reply, timestamp: now(), auto: true });
+                if (t2.ai) t2.ai.autoReplied = true;
+                saveLeads(f2);
+              }
+              console.log(`[auto-reply] ${target.name}: ${ai.suggested_reply.slice(0, 50)}`);
+            } catch (err) {
+              console.error('[auto-reply] failed:', err.message);
             }
-            console.log(`[auto-reply] ${lead.name}: ${ai.suggested_reply.slice(0, 50)}`);
-          } catch (err) {
-            console.error('[auto-reply] failed:', err.message);
           }
         }
       }
@@ -286,7 +384,7 @@ connectWA();
 // ── Express ───────────────────────────────────────────────────────────────────
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '15mb' })); // base64 document uploads
 
 // Status + QR
 app.get('/api/status', (_req, res) => {
@@ -482,6 +580,179 @@ app.post('/api/logout', async (_req, res) => {
   connectionState = 'close';
   currentQR = null;
   res.json({ ok: true });
+});
+
+// ── Pipeline config (sessions + brief template) ─────────────────────────────────
+app.get('/api/config', (_req, res) => res.json(readConfig()));
+
+app.post('/api/config', (req, res) => {
+  const next = { ...readConfig() };
+  if (Array.isArray(req.body.sessions)) next.sessions = req.body.sessions;
+  if (typeof req.body.briefTemplate === 'string') next.briefTemplate = req.body.briefTemplate;
+  writeConfig(next);
+  res.json({ ok: true, config: next });
+});
+
+// ── Documents (uploadable agreements) ────────────────────────────────────────────
+// Metadata only — the on-disk `file` name is never exposed to the client.
+const publicDoc = ({ file, ...meta }) => meta;
+
+app.get('/api/documents', (_req, res) => res.json(readDocs().map(publicDoc)));
+
+app.post('/api/documents', (req, res) => {
+  const { name, mimetype, dataBase64 } = req.body;
+  if (!name || !dataBase64) return res.status(400).json({ error: 'name and dataBase64 required' });
+  let buf;
+  try { buf = Buffer.from(dataBase64, 'base64'); } catch { return res.status(400).json({ error: 'bad base64' }); }
+  const id = `doc_${Date.now()}`;
+  const ext = (name.match(/\.[a-z0-9]+$/i) || ['.pdf'])[0];
+  const file = `${id}${ext}`;
+  writeFileSync(join(DOCS_DIR, file), buf);
+  const docs = readDocs();
+  const meta = { id, file, name, mimetype: mimetype || 'application/pdf', size: buf.length, uploadedAt: new Date().toISOString(), isDefault: docs.length === 0 };
+  docs.push(meta);
+  saveDocs(docs);
+  console.log(`[docs] uploaded ${name} (${buf.length} bytes)`);
+  res.status(201).json(publicDoc(meta));
+});
+
+app.delete('/api/documents/:id', (req, res) => {
+  const docs = readDocs();
+  const idx = docs.findIndex((d) => d.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ error: 'not found' });
+  const [removed] = docs.splice(idx, 1);
+  try { unlinkSync(join(DOCS_DIR, removed.file)); } catch {}
+  if (removed.isDefault && docs.length) docs[0].isDefault = true; // promote a new default
+  saveDocs(docs);
+  res.json({ ok: true });
+});
+
+app.post('/api/documents/:id/default', (req, res) => {
+  const docs = readDocs();
+  if (!docs.find((d) => d.id === req.params.id)) return res.status(404).json({ error: 'not found' });
+  docs.forEach((d) => { d.isDefault = d.id === req.params.id; });
+  saveDocs(docs);
+  res.json({ ok: true });
+});
+
+// ── Pipeline stage actions ───────────────────────────────────────────────────────
+function findLead(leads, id) { return leads.find((l) => l.id === Number(id)); }
+
+async function sendDocumentsTo(jid, docs, caption) {
+  for (let i = 0; i < docs.length; i++) {
+    const d = docs[i];
+    const buf = readFileSync(join(DOCS_DIR, d.file));
+    await sock.sendMessage(jid, { document: buf, fileName: d.name, mimetype: d.mimetype || 'application/pdf', caption: i === 0 ? caption : undefined });
+    if (i < docs.length - 1) await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+
+// Send the personalised brief invite -> stage 'brief'
+app.post('/api/wf/invite/:id', async (req, res) => {
+  if (connectionState !== 'open') return res.status(503).json({ error: 'WhatsApp not connected' });
+  const message = (req.body.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'message required' });
+  const leads = readLeads();
+  const lead = findLead(leads, req.params.id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  const jid = toJid(lead.phone);
+  if (!jid) return res.status(400).json({ error: 'invalid phone number' });
+  try {
+    await sock.sendMessage(jid, { text: message });
+    const ts = new Date().toISOString();
+    lead.stage = 'brief';
+    lead.wf = { ...(lead.wf || {}), enteredAt: lead.wf?.enteredAt || ts, invitedAt: ts, inviteText: message };
+    if (!lead.sentReplies) lead.sentReplies = [];
+    lead.sentReplies.push({ text: message, timestamp: ts, kind: 'brief-invite' });
+    saveLeads(leads);
+    console.log(`[wf] invite -> ${lead.name}`);
+    res.json({ ok: true, lead });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Human approves attendance confirmation -> stage 'confirmed'
+app.post('/api/wf/confirm/:id', (req, res) => {
+  const leads = readLeads();
+  const lead = findLead(leads, req.params.id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  lead.stage = 'confirmed';
+  lead.wf = { ...(lead.wf || {}), confirmedAt: new Date().toISOString() };
+  saveLeads(leads);
+  res.json({ ok: true, lead });
+});
+
+// Mark declined (drops out of the active pipeline)
+app.post('/api/wf/decline/:id', (req, res) => {
+  const leads = readLeads();
+  const lead = findLead(leads, req.params.id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  lead.stage = 'declined';
+  lead.wf = { ...(lead.wf || {}), declinedAt: new Date().toISOString() };
+  saveLeads(leads);
+  res.json({ ok: true, lead });
+});
+
+// Assign a briefing session -> stage 'slotted'
+app.post('/api/wf/slot/:id', (req, res) => {
+  const leads = readLeads();
+  const lead = findLead(leads, req.params.id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  lead.stage = 'slotted';
+  lead.wf = { ...(lead.wf || {}), session: req.body.session || null, slottedAt: new Date().toISOString() };
+  saveLeads(leads);
+  res.json({ ok: true, lead });
+});
+
+// Tag present at the recruitment session -> stage 'attended'
+app.post('/api/wf/attend/:id', (req, res) => {
+  const leads = readLeads();
+  const lead = findLead(leads, req.params.id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  lead.stage = 'attended';
+  lead.wf = { ...(lead.wf || {}), attendedAt: new Date().toISOString() };
+  saveLeads(leads);
+  res.json({ ok: true, lead });
+});
+
+// Send the agreement document(s) over WhatsApp -> stage 'agreement_sent'
+app.post('/api/wf/agreement/:id', async (req, res) => {
+  if (connectionState !== 'open') return res.status(503).json({ error: 'WhatsApp not connected' });
+  const leads = readLeads();
+  const lead = findLead(leads, req.params.id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  const jid = toJid(lead.phone);
+  if (!jid) return res.status(400).json({ error: 'invalid phone number' });
+  const all = readDocs();
+  let chosen = Array.isArray(req.body.fileIds) && req.body.fileIds.length
+    ? all.filter((d) => req.body.fileIds.includes(d.id))
+    : all.filter((d) => d.isDefault);
+  if (!chosen.length) chosen = all.slice(0, 1);
+  if (!chosen.length) return res.status(400).json({ error: 'no documents available to send' });
+  try {
+    const caption = req.body.caption || `Hi ${lead.name}, here is the associate agreement. Please review, sign, and send the signed PDF back to me here.`;
+    await sendDocumentsTo(jid, chosen, caption);
+    const ts = new Date().toISOString();
+    lead.stage = 'agreement_sent';
+    lead.wf = { ...(lead.wf || {}), agreement: { sentAt: ts, fileIds: chosen.map((d) => d.id), fileNames: chosen.map((d) => d.name) } };
+    if (!lead.sentReplies) lead.sentReplies = [];
+    lead.sentReplies.push({ text: `[sent agreement: ${chosen.map((d) => d.name).join(', ')}]`, timestamp: ts, kind: 'agreement' });
+    saveLeads(leads);
+    console.log(`[wf] agreement -> ${lead.name} (${chosen.length} file/s)`);
+    res.json({ ok: true, lead });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Generic manual stage move (drag/correction). null clears the stage (back to inbox).
+app.post('/api/wf/stage/:id', (req, res) => {
+  const { stage } = req.body;
+  if (stage !== null && !STAGES.includes(stage) && stage !== 'declined')
+    return res.status(400).json({ error: 'invalid stage' });
+  const leads = readLeads();
+  const lead = findLead(leads, req.params.id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  if (stage === null) delete lead.stage; else lead.stage = stage;
+  saveLeads(leads);
+  res.json({ ok: true, lead });
 });
 
 const PORT = process.env.PORT || 10001;
