@@ -19,6 +19,8 @@ services:
     # Bound to localhost only; nginx terminates TLS for crm.urbanwerkzsg.com
     ports:
       - "127.0.0.1:10000:10000"
+    env_file:
+      - .env                          # AUTH_USER / AUTH_PASSWORD / AUTH_SECRET for the login gate
     environment:
       - WA_SERVER_URL=http://server:10001
     depends_on:

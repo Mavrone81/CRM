@@ -1,10 +1,11 @@
 import crypto from 'node:crypto';
 
-// Single-password gate. Credentials and the cookie-signing secret come from the
-// environment; the defaults below are dev fallbacks — override them in prod.
+// Single-password gate. The password and cookie-signing secret MUST be provided
+// via the environment (see .env) — there is no committed password. The username
+// is not a secret and falls back to a default.
 const USER = process.env.AUTH_USER || 'petsadmin';
-const PASS = process.env.AUTH_PASSWORD || 'P@55w0rd888';
-const SECRET = process.env.AUTH_SECRET || 'watapp-dev-secret-change-me';
+const PASS = process.env.AUTH_PASSWORD || '';
+const SECRET = process.env.AUTH_SECRET || '';
 
 export const SESSION_COOKIE = 'watapp_session';
 export const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days, in seconds
@@ -19,6 +20,8 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 export function checkCredentials(username: string, password: string): boolean {
+  // Fail closed if the gate is misconfigured — never allow an empty password in.
+  if (!PASS) return false;
   // Evaluate both halves regardless of the first result to keep timing flat.
   const u = safeEqual(username, USER);
   const p = safeEqual(password, PASS);
