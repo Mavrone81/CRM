@@ -88,7 +88,7 @@ export default function Dashboard() {
 
       {showSettings && <Settings onClose={() => setShowSettings(false)} showToast={showToast} />}
 
-      {toast && <div className={`fixed bottom-6 right-6 px-4 py-3 rounded-xl text-sm font-medium shadow-xl ${toast.ok ? 'bg-green-700 text-green-50' : 'bg-red-800 text-red-100'}`}>{toast.msg}</div>}
+      {toast && <div className={`fixed bottom-4 right-4 left-4 sm:left-auto sm:bottom-6 sm:right-6 max-w-sm sm:max-w-md px-4 py-3 rounded-xl text-sm font-medium shadow-xl break-words ${toast.ok ? 'bg-green-700 text-green-50' : 'bg-red-800 text-red-100'}`}>{toast.msg}</div>}
     </div>
   );
 }

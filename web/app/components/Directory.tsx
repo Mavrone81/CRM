@@ -18,7 +18,11 @@ const GROUPS: { key: string; label: string }[] = [
 export default function Directory({ leads, numbers, showToast, refresh }: { leads: Lead[]; numbers: WaNumber[]; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
   const [search, setSearch] = useState('');
   const [group, setGroup] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<Status | 'all'>('all');
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'name', dir: 1 });
+  // Count of leads per status (drives the status-workflow chips).
+  const statusCount: Record<string, number> = {};
+  leads.forEach((l) => { const s = (l.status || 'new'); statusCount[s] = (statusCount[s] || 0) + 1; });
   const sortBy = (key: string) => setSort((s) => (s.key === key ? { key, dir: (s.dir === 1 ? -1 : 1) as 1 | -1 } : { key, dir: 1 }));
   const arrow = (key: string) => (sort.key === key ? (sort.dir === 1 ? ' ▲' : ' ▼') : '');
   const [replyFor, setReplyFor] = useState<number | null>(null);
@@ -42,9 +46,10 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
   const visible = leads.filter((l) => {
     const s = (l.status || 'new') as Status;
     const matchGroup = group === 'all' || STATUS_META[s]?.group === group;
+    const matchStatus = statusFilter === 'all' || s === statusFilter;
     const q = search.toLowerCase();
     const matchSearch = !q || l.name.toLowerCase().includes(q) || l.phone.includes(search) || (l.email || '').toLowerCase().includes(q);
-    return matchGroup && matchSearch;
+    return matchGroup && matchStatus && matchSearch;
   });
 
   const sortVal = (l: Lead): string | number => {
@@ -95,9 +100,17 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
       <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 flex flex-wrap items-center gap-2 sm:gap-3">
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, phone, email…" className="w-full sm:flex-1 sm:w-auto bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-green-600" />
         <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 overflow-x-auto max-w-full">
-          {GROUPS.map((g) => <button key={g.key} onClick={() => setGroup(g.key)} className={`px-3 py-1 rounded text-sm whitespace-nowrap ${group === g.key ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>{g.label}</button>)}
+          {GROUPS.map((g) => <button key={g.key} onClick={() => { setGroup(g.key); setStatusFilter('all'); }} className={`px-3 py-1 rounded text-sm whitespace-nowrap ${group === g.key && statusFilter === 'all' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>{g.label}</button>)}
         </div>
         <button onClick={() => setShowAdd(true)} className="bg-green-700 hover:bg-green-600 text-white text-sm font-medium px-4 py-2 rounded-lg whitespace-nowrap">+ Add Lead</button>
+      </div>
+
+      {/* Status workflow: click a status to see only those leads */}
+      <div className="px-4 sm:px-6 py-2 border-b border-gray-800 flex gap-1.5 overflow-x-auto">
+        <button onClick={() => { setStatusFilter('all'); setGroup('all'); }} className={`px-2.5 py-1 rounded-full text-xs whitespace-nowrap border ${statusFilter === 'all' ? 'bg-gray-700 border-gray-600 text-white' : 'bg-gray-900 border-gray-800 text-gray-400 hover:text-gray-200'}`}>All <span className="opacity-60">{leads.length}</span></button>
+        {ALL_STATUSES.filter((s) => statusCount[s]).map((s) => (
+          <button key={s} onClick={() => { setStatusFilter(s); setGroup('all'); }} className={`px-2.5 py-1 rounded-full text-xs whitespace-nowrap border ${statusFilter === s ? `${STATUS_META[s].chip} border-current` : 'bg-gray-900 border-gray-800 text-gray-400 hover:text-gray-200'}`}>{STATUS_META[s].label} <span className="opacity-60">{statusCount[s]}</span></button>
+        ))}
       </div>
 
       <div className="flex-1 overflow-auto">
