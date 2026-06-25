@@ -680,7 +680,7 @@ app.use(express.json({ limit: '15mb' })); // base64 document uploads
 
 // Status + QR
 app.get('/api/status', (_req, res) => {
-  res.json({ state: connectionState, qr: currentQR, ai: !!anthropic, autoReply: readConfig().autoReply });
+  res.json({ state: connectionState, qr: currentQR, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername } });
 });
 
 // Toggle auto-reply (bot) mode on/off
@@ -1131,6 +1131,81 @@ app.post('/api/leads/:id/reply', async (req, res) => {
   }
   res.json({ ok: true, lead });
 });
+
+// ── Telegram bot (long-poll) — ban-free channel for engaged leads ───────────────
+const TG_TOKEN = process.env.TELEGRAM_TOKEN || '';
+let tgState = TG_TOKEN ? 'starting' : 'off';
+let tgUsername = '';
+let tgOffset = 0;
+
+async function tgCall(method, params) {
+  const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN}/${method}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(params || {}),
+  });
+  return r.json();
+}
+const tgSend = (chatId, text) => tgCall('sendMessage', { chat_id: chatId, text });
+const findLeadByTg = (leads, chatId) => leads.find((l) => String(l.telegramChatId) === String(chatId));
+
+function newTgLead(leads, chatId, name) {
+  const id = leads.length ? Math.max(...leads.map((l) => l.id)) + 1 : 1;
+  const lead = { id, name, phone: '', email: '', notes: 'via Telegram', adviser: '', created: new Date().toISOString(), sent: false, sentAt: null, replies: [], status: 'new', channel: 'telegram', telegramChatId: chatId };
+  leads.push(lead);
+  return lead;
+}
+
+async function processTgMessage(msg) {
+  if (!msg.chat || !msg.text) return;
+  const chatId = msg.chat.id;
+  const text = msg.text.trim();
+  const name = [msg.chat.first_name, msg.chat.last_name].filter(Boolean).join(' ') || msg.chat.username || 'Telegram user';
+
+  // /start <leadId> deep link binds this chat to an existing lead.
+  const m = text.match(/^\/start(?:\s+(\d+))?/);
+  if (m) {
+    const leads = readLeads();
+    let lead = m[1] ? leads.find((l) => l.id === Number(m[1])) : findLeadByTg(leads, chatId);
+    if (lead) { lead.telegramChatId = chatId; if (!lead.channel) lead.channel = 'telegram'; }
+    else lead = newTgLead(leads, chatId, name);
+    saveLeads(leads);
+    await tgSend(chatId, `Hi ${lead.name || name}! Thanks for reaching out 🙂 Are you keen to hear about a flexible income opportunity? Just let me know.`);
+    return;
+  }
+
+  const leads = readLeads();
+  let lead = findLeadByTg(leads, chatId) || newTgLead(leads, chatId, name);
+  if (!lead.replies) lead.replies = [];
+  lead.replies.push({ text, timestamp: new Date().toISOString(), channel: 'telegram' });
+  lead.needsReply = true;
+  saveLeads(leads);
+  console.log(`[tg] ${lead.name}: ${text}`);
+
+  // Triage classify (no auto-send; suggested reply shows in the Inbox for review).
+  const st = lead.status || deriveStatus(lead);
+  if (['new', 'contacted', 'question', 'review'].includes(st)) {
+    try {
+      const ai = await classifyReplies(lead.name, lead.replies);
+      const f = readLeads(); const t = f.find((l) => l.id === lead.id);
+      if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; t.status = statusFromCategory(ai.category); saveLeads(f); console.log(`[tg] ${lead.name} -> ${t.status}`); }
+    } catch (e) { console.error('[tg] classify failed:', e.message); }
+  }
+}
+
+async function tgPoll() {
+  if (!TG_TOKEN) return;
+  try {
+    const r = await tgCall('getUpdates', { offset: tgOffset, timeout: 25 });
+    if (r.ok) {
+      tgState = 'open';
+      for (const u of r.result || []) { tgOffset = u.update_id + 1; if (u.message) await processTgMessage(u.message).catch((e) => console.error('[tg]', e.message)); }
+    } else { tgState = 'error'; }
+  } catch (e) { tgState = 'error'; console.error('[tg] poll error:', e.message); }
+  setTimeout(tgPoll, 500);
+}
+if (TG_TOKEN) {
+  tgCall('getMe').then((r) => { if (r.ok) { tgUsername = r.result.username; console.log('[tg] bot online: @' + tgUsername); } else console.log('[tg] token invalid'); });
+  tgPoll();
+}
 
 ensureStatuses(); // one-time idempotent backfill of `status` on existing leads
 
