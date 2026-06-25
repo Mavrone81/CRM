@@ -32,6 +32,55 @@ if (!existsSync(SIGNED_DIR)) mkdirSync(SIGNED_DIR, { recursive: true });
 // auto-advances to onboarding (role: Lead -> Potential On-board -> On-board).
 const STAGES = ['brief', 'confirmed', 'slotted', 'attended', 'agreement_sent', 'onboarding', 'onboarding_slotted', 'onboarded'];
 
+// ── Canonical lead lifecycle: a single `status` field is the source of truth ─────
+const STATUSES = [
+  'new', 'contacted', 'question', 'review',
+  'interested', 'invited', 'confirmed', 'scheduled', 'attended',
+  'agreement', 'signed', 'onboarding', 'booked', 'onboarded',
+  'declined', 'opted_out',
+];
+const PIPELINE_STATUSES = ['interested', 'invited', 'confirmed', 'scheduled', 'attended', 'agreement', 'signed', 'onboarding', 'booked', 'onboarded'];
+
+// Derive a lead's status from the legacy fields (one-time migration + new-lead default).
+function deriveStatus(l) {
+  const stage = l.stage, ai = l.ai && l.ai.category, wf = l.wf || {};
+  const sent = (kind) => (l.sentReplies || []).some((r) => r.kind === kind);
+  if (stage === 'onboarded') return 'onboarded';
+  if (stage === 'onboarding_slotted') return 'booked';
+  if (stage === 'onboarding') return 'onboarding';
+  if (stage === 'agreement_sent') return (wf.signed && wf.signed.result && wf.signed.result.complete) ? 'signed' : (sent('agreement') ? 'agreement' : 'attended');
+  if (stage === 'attended') return 'attended';
+  if (stage === 'slotted') return 'scheduled';
+  if (stage === 'confirmed') return 'confirmed';
+  if (stage === 'brief') return sent('brief-invite') ? 'invited' : 'interested';
+  if (stage === 'declined') return wf.optedOut ? 'opted_out' : 'declined';
+  if (wf.optedOut) return 'opted_out';
+  if (ai === 'interested') return 'interested';
+  if (ai === 'not_interested') return 'declined';
+  if (ai === 'question') return 'question';
+  if (ai === 'other') return 'review';
+  if ((l.replies || []).length) return 'review';
+  if (l.sent) return 'contacted';
+  return 'new';
+}
+
+// Map an AI reply category to a triage status (used when a NEW reply arrives).
+function statusFromCategory(cat) {
+  return cat === 'interested' ? 'interested' : cat === 'not_interested' ? 'declined' : cat === 'question' ? 'question' : 'review';
+}
+
+// One-time idempotent migration: backfill `status` on any lead missing it.
+function ensureStatuses() {
+  let leads;
+  try { leads = readLeads(); } catch { return; }
+  const missing = leads.filter((l) => !l.status);
+  if (!missing.length) return;
+  try { writeFileSync(LEADS_PATH + `.bak.${Date.now()}`, JSON.stringify(leads, null, 2)); } catch {}
+  for (const l of leads) if (!l.status) l.status = deriveStatus(l);
+  saveLeads(leads);
+  console.log(`[migrate] backfilled status on ${missing.length} lead(s)`);
+}
+
 // ── Knowledge base ──────────────────────────────────────────────────────────────
 // Loaded ONCE at startup (baked into the bot — never re-parsed per message).
 let KNOWLEDGE = '';
@@ -472,6 +521,7 @@ async function connectWA() {
 
       if (!lead.replies) lead.replies = [];
       lead.replies.push({ text, timestamp: new Date().toISOString() });
+      lead.needsReply = true; // new inbound awaiting a human — drives the "new reply" badge
       saveLeads(leads);
       console.log(`[reply] ${lead.name}: ${text}`);
 
@@ -480,117 +530,59 @@ async function connectWA() {
       const target = fresh.find((l) => l.id === lead.id);
       if (!target) continue;
       const now = () => new Date().toISOString();
-      const invited = target.stage === 'brief' && target.wf?.invitedAt;
+      const st = target.status || deriveStatus(target);
+      const cfg = readConfig();
 
-      if (invited) {
-        // Already invited to the briefing — classify whether they confirmed attendance.
+      // MANUAL-SEND MODE: classify + advance status (read-only) only. Never auto-send.
+      if (['new', 'contacted', 'question', 'review'].includes(st)) {
+        // Pre-pipeline triage — classify interest and route to a status.
+        const ai = await classifyReplies(target.name, target.replies);
+        target.ai = { ...ai, classifiedAt: now() };
+        target.status = statusFromCategory(ai.category);
+        saveLeads(fresh);
+        console.log(`[ai] ${target.name}: ${ai.category} -> ${target.status}`);
+      } else if (st === 'invited') {
+        // Awaiting attendance confirmation — auto-advance status (no message sent).
         const att = await classifyAttendance(target.name, target.replies);
         target.wf = { ...(target.wf || {}), confirmation: { ...att, detectedAt: now() } };
+        if (att.status === 'confirmed' && att.confidence !== 'low') target.status = 'confirmed';
+        else if (att.status === 'declined') target.status = 'declined';
         saveLeads(fresh);
-        console.log(`[attend] ${target.name}: ${att.status} (${att.confidence})`);
-        // No auto-reply once invited — attendance confirmation is approved by a human.
-      } else if (target.stage === 'agreement_sent') {
-        // Awaiting the signed agreement back. A returned PDF triggers auto-validation.
+        console.log(`[attend] ${target.name}: ${att.status} (${att.confidence}) -> ${target.status}`);
+      } else if (st === 'agreement') {
+        // Awaiting the signed agreement back — a returned PDF triggers validation.
         const isPdf = docMsg && (docMsg.mimetype || '').toLowerCase().includes('pdf');
-        saveLeads(fresh); // keep the reply record either way
+        saveLeads(fresh);
         if (isPdf) {
           try {
             const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage });
             const fname = `${target.id}-${Date.now()}.pdf`;
             writeFileSync(join(SIGNED_DIR, fname), buffer);
-            const cfg = readConfig();
             const result = await validateSignedAgreement(target.name, buffer.toString('base64'), cfg.requiredFields);
-
             const f2 = readLeads();
             const t2 = f2.find((l) => l.id === target.id);
             if (t2) {
               t2.wf = t2.wf || {};
               const prev = t2.wf.signed || { attempts: 0, history: [] };
               t2.wf.signed = { attempts: (prev.attempts || 0) + 1, history: [...(prev.history || []), { at: now(), file: fname, ...result }], lastFile: fname, receivedAt: now(), result };
-              const jid = toJid(t2.phone);
-              if (result.complete) {
-                // ✓ complete + signed -> auto thank-you + onboarding options, role -> potential on-board
-                t2.stage = 'onboarding';
-                t2.role = 'potential_onboard';
-                t2.wf.onboardingOfferedAt = now();
-                const offer = (cfg.onboardingTemplate || '').replace(/\[Name\]/g, t2.name).replace(/\[Sessions\]/g, fmtSessionList(cfg.onboardingSessions));
-                if (!t2.sentReplies) t2.sentReplies = [];
-                t2.sentReplies.push({ text: offer, timestamp: now(), auto: true, kind: 'onboarding-offer' });
-                saveLeads(f2);
-                if (jid) { try { await sock.sendMessage(jid, { text: offer }); } catch {} }
-                console.log(`[wf] ${t2.name} agreement COMPLETE -> onboarding (potential on-board)`);
-              } else {
-                // ✗ missing fields -> auto-chase
-                const missingBlock = (result.missing || []).map((m) => `• ${m}`).join('\n') || '• (some details)';
-                const chase = (cfg.chaseTemplate || '').replace(/\[Name\]/g, t2.name).replace(/\[Missing\]/g, missingBlock);
-                if (!t2.sentReplies) t2.sentReplies = [];
-                t2.sentReplies.push({ text: chase, timestamp: now(), auto: true, kind: 'chase' });
-                saveLeads(f2);
-                if (jid) { try { await sock.sendMessage(jid, { text: chase }); } catch {} }
-                console.log(`[wf] ${t2.name} signed INCOMPLETE (missing ${result.missing?.length || 0}) -> chased`);
-              }
+              if (result.complete) t2.status = 'signed'; // incomplete stays 'agreement' (chase sent manually)
+              saveLeads(f2);
+              console.log(`[signed] ${t2.name}: complete=${result.complete} missing=${(result.missing || []).length} -> ${t2.status}`);
             }
-          } catch (err) {
-            console.error('[wf] signed-return processing failed:', err.message);
-          }
+          } catch (err) { console.error('[signed] processing failed:', err.message); }
         }
-      } else if (target.stage === 'onboarding') {
-        // Awaiting the lead's onboarding-session pick — AI parses their reply.
-        const cfg = readConfig();
+      } else if (st === 'onboarding') {
+        // Awaiting onboarding-session pick — AI parses choice and books (no message sent).
         const r = await parseOnboardingChoice(text, cfg.onboardingSessions);
-        const f2 = readLeads();
-        const t2 = f2.find((l) => l.id === target.id);
-        if (t2 && r.sessionId) {
-          const s = cfg.onboardingSessions.find((x) => x.id === r.sessionId);
-          t2.stage = 'onboarding_slotted';
-          t2.wf = { ...(t2.wf || {}), onboardingSession: r.sessionId, onboardingSlottedAt: now() };
-          const confirm = `Great ${t2.name}, you're booked for ${s?.label}${s?.date ? ' on ' + s.date : ''}. See you there!`;
-          if (!t2.sentReplies) t2.sentReplies = [];
-          t2.sentReplies.push({ text: confirm, timestamp: now(), auto: true, kind: 'onboarding-confirm' });
-          saveLeads(f2);
-          const jid = toJid(t2.phone);
-          if (jid) { try { await sock.sendMessage(jid, { text: confirm }); } catch {} }
-          console.log(`[wf] ${t2.name} picked onboarding ${r.sessionId} -> onboarding_slotted`);
-        } else {
-          saveLeads(fresh); // unclear pick — leave for another reply / manual
+        if (r.sessionId) {
+          target.status = 'booked';
+          target.wf = { ...(target.wf || {}), onboardingSession: r.sessionId, onboardingSlottedAt: now() };
+          console.log(`[onboarding] ${target.name} picked ${r.sessionId} -> booked`);
         }
-      } else if (target.stage && target.stage !== 'brief') {
-        // Other stages — just keep the reply, no re-classification.
         saveLeads(fresh);
       } else {
-        // Inbox stage: interest classification, auto-surfacing interested leads to 'brief'.
-        const ai = await classifyReplies(target.name, target.replies);
-        target.ai = { ...ai, classifiedAt: now() };
-        if (ai.category === 'interested' && !target.stage) {
-          target.stage = 'brief';
-          target.wf = { ...(target.wf || {}), enteredAt: now() };
-          console.log(`[pipeline] ${target.name} -> brief (interested)`);
-        }
+        // Any other status — keep the reply + needsReply flag, no change.
         saveLeads(fresh);
-        console.log(`[ai] ${target.name}: ${ai.category} (${ai.confidence})`);
-
-        // Auto-reply: if bot mode is ON, send the knowledge-grounded reply back.
-        if (readConfig().autoReply && ai.suggested_reply && text !== '[media]') {
-          const jid = toJid(target.phone);
-          if (jid) {
-            // small human-like delay before replying
-            await new Promise((r) => setTimeout(r, 3000 + Math.floor(Math.random() * 4000)));
-            try {
-              await sock.sendMessage(jid, { text: ai.suggested_reply });
-              const f2 = readLeads();
-              const t2 = f2.find((l) => l.id === target.id);
-              if (t2) {
-                if (!t2.sentReplies) t2.sentReplies = [];
-                t2.sentReplies.push({ text: ai.suggested_reply, timestamp: now(), auto: true });
-                if (t2.ai) t2.ai.autoReplied = true;
-                saveLeads(f2);
-              }
-              console.log(`[auto-reply] ${target.name}: ${ai.suggested_reply.slice(0, 50)}`);
-            } catch (err) {
-              console.error('[auto-reply] failed:', err.message);
-            }
-          }
-        }
       }
     }
   });
@@ -724,7 +716,7 @@ app.post('/api/leads', (req, res) => {
   if (!name || !phone) return res.status(400).json({ error: 'name and phone required' });
   const leads = readLeads();
   const id = leads.length ? Math.max(...leads.map((l) => l.id)) + 1 : 1;
-  const lead = { id, name, phone, email: email || '', notes: notes || '', adviser: adviser || '', created: new Date().toISOString(), sent: false, sentAt: null, replies: [] };
+  const lead = { id, name, phone, email: email || '', notes: notes || '', adviser: adviser || '', created: new Date().toISOString(), sent: false, sentAt: null, replies: [], status: 'new' };
   leads.unshift(lead);
   saveLeads(leads);
   res.status(201).json(lead);
@@ -1040,6 +1032,57 @@ app.post('/api/wf/stage/:id', (req, res) => {
   saveLeads(leads);
   res.json({ ok: true, lead });
 });
+
+// ── Canonical lifecycle endpoints (status is the single source of truth) ─────────
+
+// Set a lead's status (the ONE transition path). Acting on a lead clears needsReply.
+app.post('/api/leads/:id/status', (req, res) => {
+  const { status } = req.body;
+  if (!STATUSES.includes(status)) return res.status(400).json({ error: 'invalid status' });
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  lead.status = status;
+  lead.needsReply = false;
+  if (req.body.session !== undefined) lead.wf = { ...(lead.wf || {}), session: req.body.session };
+  saveLeads(leads);
+  res.json({ ok: true, lead });
+});
+
+// Clear the "new reply" flag without changing status (acknowledge).
+app.post('/api/leads/:id/ack', (req, res) => {
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  lead.needsReply = false;
+  saveLeads(leads);
+  res.json({ ok: true, lead });
+});
+
+// Manually log an inbound reply the bot missed; classify + route status if pre-pipeline.
+app.post('/api/leads/:id/reply', async (req, res) => {
+  const text = (req.body.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'text required' });
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  if (!lead.replies) lead.replies = [];
+  lead.replies.push({ text, timestamp: new Date().toISOString(), manual: true });
+  lead.needsReply = true;
+  saveLeads(leads);
+  const st = lead.status || deriveStatus(lead);
+  if (['new', 'contacted', 'question', 'review'].includes(st) && req.body.classify !== false) {
+    try {
+      const ai = await classifyReplies(lead.name, lead.replies);
+      const fresh = readLeads();
+      const t = fresh.find((l) => l.id === lead.id);
+      if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; t.status = statusFromCategory(ai.category); saveLeads(fresh); return res.json({ ok: true, lead: t }); }
+    } catch {}
+  }
+  res.json({ ok: true, lead });
+});
+
+ensureStatuses(); // one-time idempotent backfill of `status` on existing leads
 
 const PORT = process.env.PORT || 10001;
 app.listen(PORT, () => console.log(`[server] http://localhost:${PORT}`));

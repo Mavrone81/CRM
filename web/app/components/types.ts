@@ -64,6 +64,8 @@ export type Lead = {
   stage?: Stage;
   wf?: Wf;
   role?: Role;
+  status?: import('./status').Status; // canonical lifecycle state
+  needsReply?: boolean;               // new inbound awaiting a human
 };
 
 export type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean; autoReply?: boolean };
