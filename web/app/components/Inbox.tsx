@@ -9,6 +9,19 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
   const [busy, setBusy] = useState<Set<number>>(new Set());
   const [replyFor, setReplyFor] = useState<number | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [composeFor, setComposeFor] = useState<number | null>(null);
+  const [composeText, setComposeText] = useState('');
+  const [suggesting, setSuggesting] = useState<number | null>(null);
+
+  const suggest = async (id: number) => {
+    setSuggesting(id);
+    try {
+      const r = await fetch(`/api/proxy/leads/${id}/suggest`, { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.suggested_reply) { setComposeFor(id); setComposeText(d.suggested_reply); refresh(); }
+      else showToast(d.error || 'Could not generate a suggestion', false);
+    } catch { showToast('Network error', false); } finally { setSuggesting(null); }
+  };
 
   const queue = leads
     .filter((l) => l.status === 'question' || l.status === 'review' || l.status === 'new')
@@ -43,13 +56,20 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
               </div>
               {lr && <p className="text-sm text-gray-200 bg-gray-800/60 rounded-lg px-3 py-2">“{lr.text}”</p>}
               {l.ai?.reason && <p className="text-xs text-gray-400 italic">{l.ai.reason}</p>}
-              {l.ai?.suggested_reply && (
-                <div className="text-xs bg-gray-950/60 border border-gray-800 rounded-lg p-2.5 flex items-start gap-2">
-                  <span className="text-purple-300 whitespace-nowrap">Draft:</span>
-                  <span className="text-gray-300 flex-1">{l.ai.suggested_reply}</span>
-                  {l.channel === 'telegram' && <button onClick={() => act(l.id, () => sendReply(l.id, l.ai!.suggested_reply), `Sent to ${l.name}`)} disabled={b} className="text-green-400 hover:text-green-300 whitespace-nowrap font-medium">Send</button>}
-                  <button onClick={() => { navigator.clipboard.writeText(l.ai!.suggested_reply); showToast(l.channel === 'telegram' ? 'Copied' : 'Copied — send from your phone'); }} className="text-gray-400 hover:text-gray-200 whitespace-nowrap">Copy</button>
+              {(l.ai?.suggested_reply || composeFor === l.id) ? (
+                <div className="flex flex-col gap-1.5 bg-gray-950/60 border border-gray-800 rounded-lg p-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-purple-300">Suggested reply <span className="text-gray-600">· {l.channel === 'telegram' ? 'Telegram' : 'WhatsApp'}</span></span>
+                    <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} className="text-[11px] text-gray-400 hover:text-gray-200">{suggesting === l.id ? '…' : '✨ Regenerate'}</button>
+                  </div>
+                  <textarea value={composeFor === l.id ? composeText : (l.ai?.suggested_reply || '')} onChange={(e) => { setComposeFor(l.id); setComposeText(e.target.value); }} rows={3} className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 resize-none focus:outline-none focus:border-green-600" />
+                  <div className="flex gap-2">
+                    <button onClick={() => act(l.id, () => sendReply(l.id, composeFor === l.id ? composeText : l.ai!.suggested_reply), `Sent to ${l.name}`).then(() => setComposeFor(null))} disabled={b || !((composeFor === l.id ? composeText : l.ai?.suggested_reply) || '').trim()} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg">{b ? '…' : `Send ${l.channel === 'telegram' ? '✈' : 'via WhatsApp'}`}</button>
+                    <button onClick={() => { navigator.clipboard.writeText((composeFor === l.id ? composeText : l.ai?.suggested_reply) || ''); showToast('Copied'); }} className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1.5">Copy</button>
+                  </div>
                 </div>
+              ) : (
+                <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} className="self-start text-xs text-purple-300 hover:text-purple-200 border border-purple-900/50 rounded-lg px-3 py-1.5 disabled:opacity-50">{suggesting === l.id ? 'Generating…' : '✨ Suggest a reply'}</button>
               )}
               <div className="flex gap-2 flex-wrap items-center">
                 <button onClick={() => act(l.id, () => setStatus(l.id, 'interested'), `${l.name} → pipeline`)} disabled={b} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg">→ Interested</button>

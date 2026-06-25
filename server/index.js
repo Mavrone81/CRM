@@ -1241,7 +1241,45 @@ app.post('/api/leads/:id/send', async (req, res) => {
     saveLeads(leads);
     return res.json({ ok: true, lead });
   }
-  return res.status(400).json({ error: 'WhatsApp lead — send from your phone (manual mode). Only Telegram replies send from the CRM.' });
+  // WhatsApp send via the lead's sticky number. Anti-ban: each message is the
+  // AI's per-lead reply (generated with high variation) so no two are alike.
+  const sock = sockForLead(lead);
+  if (!sock) return res.status(503).json({ error: 'No connected WhatsApp number available for this lead.' });
+  const jid = toJid(lead.phone);
+  if (!jid) return res.status(400).json({ error: 'Lead has no valid phone number.' });
+  try {
+    await sock.sendMessage(jid, { text });
+    if (!lead.sentReplies) lead.sentReplies = [];
+    lead.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'whatsapp' });
+    lead.lastContactedAt = new Date().toISOString();
+    lead.needsReply = false;
+    if (!lead.assignedNumber) { const e = [...conns.entries()].find(([, v]) => v.sock === sock); if (e) lead.assignedNumber = e[0]; }
+    saveLeads(leads);
+    return res.json({ ok: true, lead });
+  } catch (e) { return res.status(502).json({ error: 'WhatsApp send failed: ' + e.message }); }
+});
+
+// Generate a fresh, varied suggested reply for a lead (so no two are similar —
+// avoids WhatsApp flagging templated bulk sends). Contextual for leads who have
+// replied; a spintax opening for not-yet-contacted leads. Stores on the lead.
+app.post('/api/leads/:id/suggest', async (req, res) => {
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  try {
+    let suggested;
+    if (lead.replies?.length) {
+      const ai = await classifyReplies(lead.name, lead.replies);
+      suggested = ai.suggested_reply;
+      const f = readLeads(); const t = f.find((l) => l.id === lead.id);
+      if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; saveLeads(f); }
+    } else {
+      suggested = buildMessage(lead.name); // spintax opening — different every call
+      const f = readLeads(); const t = f.find((l) => l.id === lead.id);
+      if (t) { t.ai = { ...(t.ai || {}), suggested_reply: suggested, classifiedAt: new Date().toISOString() }; saveLeads(f); }
+    }
+    return res.json({ ok: true, suggested_reply: suggested });
+  } catch (e) { return res.status(500).json({ error: 'suggest failed: ' + e.message }); }
 });
 
 // ── Telegram bot (long-poll) — ban-free channel for engaged leads ───────────────
