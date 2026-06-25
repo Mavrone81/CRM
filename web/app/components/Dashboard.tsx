@@ -17,7 +17,7 @@ export default function Dashboard() {
   const router = useRouter();
   const [leads, setLeads] = useState<Lead[]>([]);
   const [status, setStatus] = useState<WaStatus>({ state: 'close', qr: null });
-  const [view, setView] = useState<View>('inbox');
+  const [view, setView] = useState<View>('directory');
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [showWa, setShowWa] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -46,9 +46,9 @@ export default function Dashboard() {
   const sentCount = leads.filter((l) => l.sent).length;
 
   const tabs: { key: View; label: string; badge?: number }[] = [
+    { key: 'directory', label: 'Directory' },
     { key: 'inbox', label: 'Inbox', badge: inboxCount },
     { key: 'pipeline', label: 'Pipeline', badge: pipelineCount },
-    { key: 'directory', label: 'Directory' },
     { key: 'analytics', label: 'Analytics' },
   ];
 
