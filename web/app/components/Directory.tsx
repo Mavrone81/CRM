@@ -9,9 +9,8 @@ import { API, logReply, setStatus, updateLead } from './leadApi';
 
 const GROUPS: { key: string; label: string }[] = [
   { key: 'all', label: 'All' },
-  { key: 'inbox', label: 'Inbox' },
-  { key: 'pipeline', label: 'Pipeline' },
   { key: 'outreach', label: 'Outreach' },
+  { key: 'pipeline', label: 'Pipeline' },
   { key: 'closed', label: 'Closed' },
 ];
 
