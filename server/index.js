@@ -784,6 +784,32 @@ app.post('/api/leads', (req, res) => {
   res.status(201).json(lead);
 });
 
+// Bulk CSV import — creates leads, skipping duplicates (by phone last-8, else name)
+// against existing leads AND within the batch. Returns an added/skipped summary.
+app.post('/api/leads/import', (req, res) => {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (!rows.length) return res.status(400).json({ error: 'no rows' });
+  const leads = readLeads();
+  const keyOf = (name, phone) => { const d = (phone || '').replace(/\D/g, ''); return d.length >= 8 ? 'p:' + d.slice(-8) : (name ? 'n:' + name.trim().toLowerCase() : null); };
+  const exist = new Set();
+  leads.forEach((l) => { const d = (l.phone || '').replace(/\D/g, ''); if (d.length >= 8) exist.add('p:' + d.slice(-8)); if (l.name) exist.add('n:' + l.name.trim().toLowerCase()); });
+  const seen = new Set();
+  let nextId = leads.length ? Math.max(...leads.map((l) => l.id)) + 1 : 1;
+  let added = 0; const skipped = [];
+  for (const r of rows) {
+    const name = (r.name || '').trim(); const phone = (r.phone || '').trim();
+    if (!name && !phone) { skipped.push({ name, phone, reason: 'empty' }); continue; }
+    const k = keyOf(name, phone);
+    if (k && (exist.has(k) || seen.has(k))) { skipped.push({ name, phone, reason: 'duplicate' }); continue; }
+    if (k) seen.add(k);
+    leads.unshift({ id: nextId++, name, phone, email: (r.email || '').trim(), notes: (r.notes || '').trim(), adviser: (r.adviser || '').trim(), created: new Date().toISOString(), sent: false, sentAt: null, replies: [], status: 'new' });
+    added++;
+  }
+  saveLeads(leads);
+  console.log(`[import] +${added} leads, ${skipped.length} skipped (of ${rows.length})`);
+  res.json({ ok: true, added, skipped, total: rows.length });
+});
+
 // Mark lead sent/unsent
 app.patch('/api/leads/:id', (req, res) => {
   const leads = readLeads();

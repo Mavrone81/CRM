@@ -11,7 +11,7 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
   const [replyText, setReplyText] = useState('');
 
   const queue = leads
-    .filter((l) => l.status === 'question' || l.status === 'review')
+    .filter((l) => l.status === 'question' || l.status === 'review' || l.status === 'new')
     .sort((a, b) => Number(b.needsReply) - Number(a.needsReply));
 
   const mark = (id: number, on: boolean) => setBusy((p) => { const n = new Set(p); on ? n.add(id) : n.delete(id); return n; });
@@ -33,11 +33,11 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
           const lr = l.replies?.[l.replies.length - 1];
           const b = busy.has(l.id);
           return (
-            <div key={l.id} className={`rounded-xl border p-4 flex flex-col gap-2 ${l.status === 'question' ? 'border-yellow-800/50 bg-yellow-950/10' : 'border-orange-800/40 bg-orange-950/10'}`}>
+            <div key={l.id} className={`rounded-xl border p-4 flex flex-col gap-2 ${l.status === 'question' ? 'border-yellow-800/50 bg-yellow-950/10' : l.status === 'new' ? 'border-gray-700 bg-gray-900/40' : 'border-orange-800/40 bg-orange-950/10'}`}>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium text-gray-100">{l.name}</span>
                 <span className="text-xs text-gray-500 font-mono">{l.phone}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${l.status === 'question' ? 'bg-yellow-900 text-yellow-300' : 'bg-orange-900/60 text-orange-300'}`}>{l.status === 'question' ? '? Question' : 'Needs review'}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${l.status === 'question' ? 'bg-yellow-900 text-yellow-300' : l.status === 'new' ? 'bg-gray-800 text-gray-300' : 'bg-orange-900/60 text-orange-300'}`}>{l.status === 'question' ? '? Question' : l.status === 'new' ? 'New — to contact' : 'Needs review'}</span>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${l.channel === 'telegram' ? 'bg-sky-950 border-sky-800 text-sky-300' : 'bg-green-950 border-green-800 text-green-300'}`}>{l.channel === 'telegram' ? '✈ Telegram' : 'WhatsApp'}</span>
                 {l.needsReply && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new</span>}
               </div>

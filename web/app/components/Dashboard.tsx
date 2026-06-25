@@ -41,7 +41,7 @@ export default function Dashboard() {
 
   const logout = async () => { try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {} router.replace('/login'); router.refresh(); };
 
-  const inboxCount = leads.filter((l) => l.status === 'question' || l.status === 'review').length;
+  const inboxCount = leads.filter((l) => l.status === 'question' || l.status === 'review' || l.status === 'new').length;
   const pipelineCount = leads.filter((l) => l.status && !['new', 'contacted', 'question', 'review', 'declined', 'opted_out'].includes(l.status)).length;
   const sentCount = leads.filter((l) => l.sent).length;
 

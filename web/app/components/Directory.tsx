@@ -15,6 +15,44 @@ const GROUPS: { key: string; label: string }[] = [
   { key: 'closed', label: 'Closed' },
 ];
 
+type ImportRow = { name: string; phone: string; email: string; notes: string; adviser: string };
+// Parse CSV (quoted fields supported). Maps flexible headers; falls back to
+// name,phone,email column order when there's no recognisable header row.
+function parseCSV(text: string): ImportRow[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (!lines.length) return [];
+  const parseLine = (line: string) => {
+    const out: string[] = []; let cur = ''; let q = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+      else if (c === '"') q = true;
+      else if (c === ',') { out.push(cur); cur = ''; }
+      else cur += c;
+    }
+    out.push(cur); return out;
+  };
+  const headers = parseLine(lines[0]).map((h) => h.trim().toLowerCase());
+  const alias: Record<keyof ImportRow, string[]> = {
+    name: ['name', 'full name', 'lead name', 'contact', 'contact name'],
+    phone: ['phone', 'mobile', 'number', 'contact number', 'phone number', 'hp', 'mobile number', 'tel'],
+    email: ['email', 'e-mail'],
+    notes: ['notes', 'note', 'remark', 'remarks'],
+    adviser: ['adviser', 'advisor', 'agent', 'referrer', 'source'],
+  };
+  const idx: Record<string, number> = {};
+  (Object.keys(alias) as (keyof ImportRow)[]).forEach((k) => { idx[k] = headers.findIndex((h) => alias[k].includes(h)); });
+  const hasHeader = idx.name >= 0 || idx.phone >= 0;
+  const data = hasHeader ? lines.slice(1) : lines;
+  const get = (cells: string[], i: number) => (i >= 0 ? (cells[i] || '').trim() : '');
+  return data.map((line) => {
+    const c = parseLine(line);
+    return hasHeader
+      ? { name: get(c, idx.name), phone: get(c, idx.phone), email: get(c, idx.email), notes: get(c, idx.notes), adviser: get(c, idx.adviser) }
+      : { name: (c[0] || '').trim(), phone: (c[1] || '').trim(), email: (c[2] || '').trim(), notes: '', adviser: '' };
+  }).filter((r) => r.name || r.phone);
+}
+
 export default function Directory({ leads, numbers, showToast, refresh }: { leads: Lead[]; numbers: WaNumber[]; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
   const [search, setSearch] = useState('');
   const [group, setGroup] = useState('all');
@@ -32,6 +70,19 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
   const [saving, setSaving] = useState(false);
   const [edit, setEdit] = useState<Lead | null>(null);
   const [editForm, setEditForm] = useState({ name: '', phone: '', email: '', notes: '', adviser: '', assignedNumber: '' });
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<{ added: number; total: number; skipped: { name: string; phone: string; reason: string }[] } | null>(null);
+
+  const handleImport = async (file: File) => {
+    setImporting(true);
+    try {
+      const rows = parseCSV(await file.text());
+      if (!rows.length) { showToast('No rows found in the CSV', false); return; }
+      const r = await fetch(`${API}/leads/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { setImportResult(d); refresh(); } else showToast(d.error || 'Import failed', false);
+    } catch { showToast('Could not read the file', false); } finally { setImporting(false); }
+  };
 
   const numLabel = (id?: string) => numbers.find((n) => n.id === id)?.label || (id ? id : '—');
   const openEdit = (l: Lead) => { setEdit(l); setEditForm({ name: l.name || '', phone: l.phone || '', email: l.email || '', notes: l.notes || '', adviser: l.adviser || '', assignedNumber: (l as Lead & { assignedNumber?: string }).assignedNumber || '' }); };
@@ -102,6 +153,10 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
         <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 overflow-x-auto max-w-full">
           {GROUPS.map((g) => <button key={g.key} onClick={() => { setGroup(g.key); setStatusFilter('all'); }} className={`px-3 py-1 rounded text-sm whitespace-nowrap ${group === g.key && statusFilter === 'all' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>{g.label}</button>)}
         </div>
+        <label className={`bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 text-sm font-medium px-4 py-2 rounded-lg whitespace-nowrap cursor-pointer ${importing ? 'opacity-50' : ''}`}>
+          {importing ? 'Importing…' : 'Import CSV'}
+          <input type="file" accept=".csv,text/csv" className="hidden" disabled={importing} onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImport(f); e.target.value = ''; }} />
+        </label>
         <button onClick={() => setShowAdd(true)} className="bg-green-700 hover:bg-green-600 text-white text-sm font-medium px-4 py-2 rounded-lg whitespace-nowrap">+ Add Lead</button>
       </div>
 
@@ -218,6 +273,26 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
               <button onClick={() => setEdit(null)} className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium py-2.5 rounded-lg">Cancel</button>
               <button onClick={saveEdit} disabled={saving} className="flex-1 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-semibold py-2.5 rounded-lg">{saving ? 'Saving…' : 'Save'}</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {importResult && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setImportResult(null)}>
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-semibold text-gray-100 mb-4">Import complete</h2>
+            <div className="flex gap-3 mb-4">
+              <div className="flex-1 rounded-xl border border-green-800 bg-green-950/30 p-3 text-center"><div className="text-2xl font-bold text-green-300">{importResult.added}</div><div className="text-xs text-gray-400">added</div></div>
+              <div className="flex-1 rounded-xl border border-amber-800 bg-amber-950/20 p-3 text-center"><div className="text-2xl font-bold text-amber-300">{importResult.skipped.length}</div><div className="text-xs text-gray-400">skipped</div></div>
+              <div className="flex-1 rounded-xl border border-gray-700 bg-gray-900 p-3 text-center"><div className="text-2xl font-bold text-gray-200">{importResult.total}</div><div className="text-xs text-gray-400">rows</div></div>
+            </div>
+            {importResult.skipped.length > 0 && (
+              <div className="text-xs text-gray-400 max-h-48 overflow-auto border border-gray-800 rounded-lg p-2 mb-4">
+                <div className="text-gray-500 mb-1">Skipped (duplicates / empty):</div>
+                {importResult.skipped.map((s, i) => <div key={i} className="truncate">• {s.name || '(no name)'}{s.phone ? ` · ${s.phone}` : ''} <span className="text-gray-600">({s.reason})</span></div>)}
+              </div>
+            )}
+            <button onClick={() => setImportResult(null)} className="w-full bg-green-600 hover:bg-green-500 text-white text-sm font-semibold py-2.5 rounded-lg">Done</button>
           </div>
         </div>
       )}
