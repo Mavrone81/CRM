@@ -413,11 +413,29 @@ function numbersWithCapacity(leads) {
   return numbersCfg().filter((n) => conns.get(n.id)?.state === 'open' && sentTodayFor(n.id, leads) < warmCap(n));
 }
 
+// ── Send window (quiet hours) — outreach only sends 07:00–22:30 SGT ──────────────
+// Singapore is a fixed UTC+8 (no DST), so derive minutes-since-midnight directly.
+function sgMinutes() {
+  const d = new Date();
+  return ((d.getUTCHours() * 60 + d.getUTCMinutes()) + 8 * 60) % (24 * 60);
+}
+const SEND_WINDOW = { start: 7 * 60, end: 22 * 60 + 30 }; // 07:00–22:30
+const inSendWindow = () => { const t = sgMinutes(); return t >= SEND_WINDOW.start && t < SEND_WINDOW.end; };
+
+// ── Opt-out detection — a reply asking us to stop ───────────────────────────────
+function isOptOut(text) {
+  const t = (text || '').toLowerCase().trim();
+  if (t === 'stop' || /^stop\b/.test(t)) return true;
+  return /\b(unsubscribe|opt[\s-]?out|remove me|take me off|stop contacting|don'?t contact|do not contact|leave me alone|not interested at all)\b/.test(t);
+}
+
 // ── Sequenced bulk outreach (paced, cap-aware, auto-failover) ───────────────────
 const outreach = { running: false, queue: [], sent: 0, failed: 0, startedAt: null };
 async function outreachTick() {
   if (!outreach.running) return;
   if (!outreach.queue.length) { outreach.running = false; console.log(`[outreach] complete — ${outreach.sent} sent`); return; }
+  // Quiet hours: hold the queue and re-check every 5 min until the window opens.
+  if (!inSendWindow()) { console.log('[outreach] outside send window (07:00–22:30 SGT) — holding'); return setTimeout(outreachTick, 5 * 60 * 1000); }
   const leads = readLeads();
   const capacity = numbersWithCapacity(leads);
   if (!capacity.length) { console.log('[outreach] all numbers capped/offline — pausing'); outreach.running = false; return; }
@@ -654,6 +672,9 @@ async function connectNumber(numId) {
       const st = target.status || deriveStatus(target);
       const cfg = readConfig();
 
+      // Opt-out: they asked us to stop — flag and never message again.
+      if (isOptOut(text)) { target.status = 'opted_out'; target.needsReply = false; saveLeads(fresh); console.log(`[optout] ${target.name} opted out`); continue; }
+
       // MANUAL-SEND MODE: classify + advance status (read-only) only. Never auto-send.
       if (['new', 'contacted', 'question', 'review'].includes(st)) {
         // Pre-pipeline triage — classify interest and route to a status.
@@ -743,7 +764,7 @@ app.get('/api/status', (_req, res) => {
   const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
   const state = anyOpen() ? 'open' : (numbers.some((n) => n.state === 'connecting') ? 'connecting' : 'close');
   const qr = (numbers.find((n) => n.state === 'connecting' && n.qr) || {}).qr || null;
-  res.json({ state, qr, numbers, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername }, outreach: { running: outreach.running, queued: outreach.queue.length, sent: outreach.sent, failed: outreach.failed } });
+  res.json({ state, qr, numbers, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername }, outreach: { running: outreach.running, queued: outreach.queue.length, sent: outreach.sent, failed: outreach.failed, windowOpen: inSendWindow() } });
 });
 
 // Toggle auto-reply (bot) mode on/off
@@ -1054,7 +1075,7 @@ app.post('/api/outreach/start', (req, res) => {
   const ids = Array.isArray(req.body.leadIds) ? req.body.leadIds : null;
   const leads = readLeads();
   let targets = ids ? leads.filter((l) => ids.includes(l.id)) : leads.filter((l) => l.status === 'new' && l.channel !== 'telegram');
-  targets = targets.filter((l) => toJid(l.phone));
+  targets = targets.filter((l) => toJid(l.phone) && l.status !== 'opted_out');
   if (!targets.length) return res.status(400).json({ error: 'no eligible leads (need a valid phone, WhatsApp channel)' });
   if (!numbersWithCapacity(leads).length) return res.status(503).json({ error: 'no connected number has capacity right now' });
   outreach.queue = targets.map((l) => l.id);
@@ -1357,6 +1378,8 @@ app.post('/api/leads/:id/send', async (req, res) => {
     saveLeads(leads);
     return res.json({ ok: true, lead });
   }
+  // Compliance: never message someone who opted out.
+  if (lead.status === 'opted_out') return res.status(400).json({ error: 'This lead opted out — messaging is blocked.' });
   // WhatsApp send via the lead's sticky number. Anti-ban: each message is the
   // AI's per-lead reply (generated with high variation) so no two are alike.
   const sock = sockForLead(lead);
@@ -1443,6 +1466,8 @@ async function processTgMessage(msg) {
   if (!lead.replies) lead.replies = [];
   lead.replies.push({ text, timestamp: new Date().toISOString(), channel: 'telegram' });
   lead.needsReply = true;
+  // Opt-out: they asked us to stop — flag and don't auto-reply.
+  if (isOptOut(text)) { lead.status = 'opted_out'; lead.needsReply = false; saveLeads(leads); console.log(`[tg][optout] ${lead.name} opted out`); return; }
   saveLeads(leads);
   console.log(`[tg] ${lead.name}: ${text}`);
 

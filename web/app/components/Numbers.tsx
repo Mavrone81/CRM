@@ -86,10 +86,11 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
           <p className="text-[11px] text-gray-600">Distribute splits every lead still needing contact almost-equally and at random across the connected numbers. Each lead then sticks to its number.</p>
 
           <div className="border-t border-gray-800 pt-3 mt-1 flex flex-col gap-2">
-            <div className="flex items-center justify-between"><span className="text-sm font-medium text-gray-200">Outreach</span>{outreach?.running && <span className="text-xs text-green-400 animate-pulse">● running</span>}</div>
+            <div className="flex items-center justify-between"><span className="text-sm font-medium text-gray-200">Outreach</span>{outreach?.running && (outreach.windowOpen === false ? <span className="text-xs text-amber-400">⏸ quiet hours</span> : <span className="text-xs text-green-400 animate-pulse">● running</span>)}</div>
             {outreach?.running ? (
               <>
                 <div className="text-xs text-gray-400 tabular-nums">Sent {outreach.sent} · {outreach.queued} queued{outreach.failed ? ` · ${outreach.failed} failed` : ''}</div>
+                {outreach.windowOpen === false && <div className="text-[11px] text-amber-400/90">Paused — outside the send window (7am–10:30pm SGT). Resumes automatically.</div>}
                 <button onClick={stopOutreach} className="text-sm bg-red-700 hover:bg-red-600 text-white rounded-lg py-2">Stop outreach</button>
               </>
             ) : (
@@ -98,7 +99,7 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
                 <button onClick={startOutreach} disabled={newLeadCount === 0 || remainingCap === 0} className="text-sm bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white font-medium rounded-lg py-2.5">Start outreach to all New leads</button>
               </>
             )}
-            <p className="text-[11px] text-gray-600">Sends a varied (spintax) opening to each New lead, paced ~20–50s apart across your numbers, never exceeding a number&apos;s daily cap. Auto-skips capped or blocked numbers.</p>
+            <p className="text-[11px] text-gray-600">Sends a varied (spintax) opening to each New lead, paced ~20–50s apart across your numbers, only during 7am–10:30pm SGT, never exceeding a number&apos;s daily cap. Auto-skips capped/blocked numbers and anyone who opted out.</p>
           </div>
         </div>
       </div>
