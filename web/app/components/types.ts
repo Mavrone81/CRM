@@ -67,6 +67,8 @@ export type Lead = {
   status?: import('./status').Status; // canonical lifecycle state
   needsReply?: boolean;               // new inbound awaiting a human
   lastContactedAt?: string;           // last time WE messaged them (manual or bot)
+  channel?: 'telegram' | 'whatsapp';  // which channel this lead is on
+  telegramChatId?: number | string;
 };
 
 // "3d ago" style relative time.

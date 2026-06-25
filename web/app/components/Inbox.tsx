@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import type { Lead } from './types';
-import { logReply, setStatus } from './leadApi';
+import { logReply, sendReply, setStatus } from './leadApi';
 
 // Triage queue: leads that replied and need a human decision (question / review).
 export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
@@ -38,6 +38,7 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
                 <span className="font-medium text-gray-100">{l.name}</span>
                 <span className="text-xs text-gray-500 font-mono">{l.phone}</span>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${l.status === 'question' ? 'bg-yellow-900 text-yellow-300' : 'bg-orange-900/60 text-orange-300'}`}>{l.status === 'question' ? '? Question' : 'Needs review'}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${l.channel === 'telegram' ? 'bg-sky-950 border-sky-800 text-sky-300' : 'bg-green-950 border-green-800 text-green-300'}`}>{l.channel === 'telegram' ? '✈ Telegram' : 'WhatsApp'}</span>
                 {l.needsReply && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new</span>}
               </div>
               {lr && <p className="text-sm text-gray-200 bg-gray-800/60 rounded-lg px-3 py-2">“{lr.text}”</p>}
@@ -46,7 +47,8 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
                 <div className="text-xs bg-gray-950/60 border border-gray-800 rounded-lg p-2.5 flex items-start gap-2">
                   <span className="text-purple-300 whitespace-nowrap">Draft:</span>
                   <span className="text-gray-300 flex-1">{l.ai.suggested_reply}</span>
-                  <button onClick={() => { navigator.clipboard.writeText(l.ai!.suggested_reply); showToast('Copied — send it from your phone'); }} className="text-gray-400 hover:text-gray-200 whitespace-nowrap">Copy</button>
+                  {l.channel === 'telegram' && <button onClick={() => act(l.id, () => sendReply(l.id, l.ai!.suggested_reply), `Sent to ${l.name}`)} disabled={b} className="text-green-400 hover:text-green-300 whitespace-nowrap font-medium">Send</button>}
+                  <button onClick={() => { navigator.clipboard.writeText(l.ai!.suggested_reply); showToast(l.channel === 'telegram' ? 'Copied' : 'Copied — send from your phone'); }} className="text-gray-400 hover:text-gray-200 whitespace-nowrap">Copy</button>
                 </div>
               )}
               <div className="flex gap-2 flex-wrap items-center">

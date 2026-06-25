@@ -23,4 +23,7 @@ export const ackLead = (id: number) => post(`/leads/${id}/ack`);
 // Manually log an inbound reply the bot missed (auto-classifies if pre-pipeline).
 export const logReply = (id: number, text: string) => post(`/leads/${id}/reply`, { text });
 
+// Send an outbound reply (Telegram sends directly; WhatsApp returns an error in manual mode).
+export const sendReply = (id: number, text: string) => post(`/leads/${id}/send`, { text });
+
 export { API };

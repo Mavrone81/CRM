@@ -46,6 +46,12 @@ export default function Dashboard() {
     try { const d = await (await fetch(`${API}/logout`, { method: 'POST' })).json(); if (d.ok) { showToast('Disconnected — scan the new QR'); fetchStatus(); } else showToast('Failed', false); }
     catch { showToast('Network error', false); } finally { setRelinking(false); }
   };
+  // Start a fresh connection to generate a QR (used when not connected / halted).
+  const connectWa = async () => {
+    setRelinking(true);
+    try { const d = await (await fetch(`${API}/logout`, { method: 'POST' })).json(); if (d.ok) { showToast('Generating QR…'); fetchStatus(); } else showToast('Failed', false); }
+    catch { showToast('Network error', false); } finally { setRelinking(false); }
+  };
 
   const inboxCount = leads.filter((l) => l.status === 'question' || l.status === 'review').length;
   const pipelineCount = leads.filter((l) => l.status && !['new', 'contacted', 'question', 'review', 'declined', 'opted_out'].includes(l.status)).length;
@@ -101,7 +107,10 @@ export default function Dashboard() {
                   <button onClick={relinkWa} disabled={relinking} className="w-full bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-lg">{relinking ? 'Disconnecting…' : 'Link a different number'}</button></>
               ) : status.qr ? (
                 <><p className="text-sm text-gray-400 text-center">WhatsApp → Linked devices → Link a device, then scan:</p><img src={status.qr} alt="QR" className="w-56 h-56 rounded-lg bg-white p-1" /></>
-              ) : (<><p className="text-sm text-gray-400 text-center">Generating a QR…</p><div className="w-56 h-56 bg-gray-800 rounded-lg animate-pulse" /></>)}
+              ) : (
+                <><p className="text-sm text-gray-400 text-center">Not connected. Generate a QR to link a number.</p>
+                  <button onClick={connectWa} disabled={relinking} className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-lg">{relinking ? 'Starting…' : 'Generate QR / Connect'}</button></>
+              )}
             </div>
           </div>
         </div>

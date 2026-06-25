@@ -1132,6 +1132,27 @@ app.post('/api/leads/:id/reply', async (req, res) => {
   res.json({ ok: true, lead });
 });
 
+// Send a reply through the lead's channel. Telegram sends directly (ban-free);
+// WhatsApp is manual-send (reply from your phone). Logs the send + last-contacted.
+app.post('/api/leads/:id/send', async (req, res) => {
+  const text = (req.body.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'text required' });
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  if (lead.channel === 'telegram' && lead.telegramChatId) {
+    const r = await tgSend(lead.telegramChatId, text);
+    if (!r || !r.ok) return res.status(502).json({ error: 'Telegram send failed: ' + ((r && r.description) || 'unknown') });
+    if (!lead.sentReplies) lead.sentReplies = [];
+    lead.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'telegram' });
+    lead.lastContactedAt = new Date().toISOString();
+    lead.needsReply = false;
+    saveLeads(leads);
+    return res.json({ ok: true, lead });
+  }
+  return res.status(400).json({ error: 'WhatsApp lead — send from your phone (manual mode). Only Telegram replies send from the CRM.' });
+});
+
 // ── Telegram bot (long-poll) — ban-free channel for engaged leads ───────────────
 const TG_TOKEN = process.env.TELEGRAM_TOKEN || '';
 let tgState = TG_TOKEN ? 'starting' : 'off';
@@ -1180,15 +1201,25 @@ async function processTgMessage(msg) {
   saveLeads(leads);
   console.log(`[tg] ${lead.name}: ${text}`);
 
-  // Triage classify (no auto-send; suggested reply shows in the Inbox for review).
-  const st = lead.status || deriveStatus(lead);
-  if (['new', 'contacted', 'question', 'review'].includes(st)) {
-    try {
-      const ai = await classifyReplies(lead.name, lead.replies);
-      const f = readLeads(); const t = f.find((l) => l.id === lead.id);
-      if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; t.status = statusFromCategory(ai.category); saveLeads(f); console.log(`[tg] ${lead.name} -> ${t.status}`); }
-    } catch (e) { console.error('[tg] classify failed:', e.message); }
-  }
+  // Telegram is ban-free, so the bot CONVERSES: classify, advance status if it's
+  // still in triage, and auto-reply with the humanised drafted message.
+  try {
+    const ai = await classifyReplies(lead.name, lead.replies);
+    const f = readLeads(); const t = f.find((l) => l.id === lead.id);
+    if (!t) return;
+    t.ai = { ...ai, classifiedAt: new Date().toISOString() };
+    const st = t.status || deriveStatus(t);
+    if (['new', 'contacted', 'question', 'review'].includes(st)) t.status = statusFromCategory(ai.category);
+    if (ai.suggested_reply && ai.category !== 'not_interested') {
+      if (!t.sentReplies) t.sentReplies = [];
+      t.sentReplies.push({ text: ai.suggested_reply, timestamp: new Date().toISOString(), channel: 'telegram', auto: true });
+      t.lastContactedAt = new Date().toISOString();
+      t.needsReply = false; // bot handled it (still visible in the lead's history)
+    }
+    saveLeads(f);
+    if (ai.suggested_reply && ai.category !== 'not_interested') { await tgSend(chatId, ai.suggested_reply); console.log(`[tg] auto-reply -> ${lead.name}: ${ai.suggested_reply.slice(0, 50)}`); }
+    console.log(`[tg] ${lead.name} -> ${t.status}`);
+  } catch (e) { console.error('[tg] classify/reply failed:', e.message); }
 }
 
 async function tgPoll() {
