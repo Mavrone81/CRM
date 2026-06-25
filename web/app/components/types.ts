@@ -95,7 +95,8 @@ export const lastContactOf = (l: Lead): string | null =>
 // Last time they replied (inbound).
 export const lastReplyOf = (l: Lead): string | null => maxTs((l.replies || []).map((r) => r.timestamp));
 
-export type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean; autoReply?: boolean };
+export type WaNumber = { id: string; label: string; state: string; qr: string | null };
+export type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean; autoReply?: boolean; numbers?: WaNumber[]; telegram?: { state: string; username: string } };
 
 // A session is defined by a calendar date + time; the weekday + 12h label are derived.
 // `label` is kept optional for backward-compat with older free-text sessions.

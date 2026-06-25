@@ -8,6 +8,7 @@ import Inbox from './Inbox';
 import Pipeline from './Pipeline';
 import Directory from './Directory';
 import Settings from './Settings';
+import Numbers from './Numbers';
 
 const API = '/api/proxy';
 type View = 'inbox' | 'pipeline' | 'directory' | 'analytics';
@@ -19,7 +20,6 @@ export default function Dashboard() {
   const [view, setView] = useState<View>('inbox');
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [showWa, setShowWa] = useState(false);
-  const [relinking, setRelinking] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
   const showToast = (msg: string, ok = true) => { setToast({ msg, ok }); setTimeout(() => setToast(null), 3500); };
@@ -40,18 +40,6 @@ export default function Dashboard() {
   }, [fetchLeads, fetchStatus]);
 
   const logout = async () => { try { await fetch('/api/auth/logout', { method: 'POST' }); } catch {} router.replace('/login'); router.refresh(); };
-  const relinkWa = async () => {
-    if (!confirm('Disconnect the current WhatsApp number and link a different one? You will scan a fresh QR.')) return;
-    setRelinking(true);
-    try { const d = await (await fetch(`${API}/logout`, { method: 'POST' })).json(); if (d.ok) { showToast('Disconnected — scan the new QR'); fetchStatus(); } else showToast('Failed', false); }
-    catch { showToast('Network error', false); } finally { setRelinking(false); }
-  };
-  // Start a fresh connection to generate a QR (used when not connected / halted).
-  const connectWa = async () => {
-    setRelinking(true);
-    try { const d = await (await fetch(`${API}/logout`, { method: 'POST' })).json(); if (d.ok) { showToast('Generating QR…'); fetchStatus(); } else showToast('Failed', false); }
-    catch { showToast('Network error', false); } finally { setRelinking(false); }
-  };
 
   const inboxCount = leads.filter((l) => l.status === 'question' || l.status === 'review').length;
   const pipelineCount = leads.filter((l) => l.status && !['new', 'contacted', 'question', 'review', 'declined', 'opted_out'].includes(l.status)).length;
@@ -96,25 +84,7 @@ export default function Dashboard() {
         {view === 'analytics' && <Analytics leads={leads} />}
       </div>
 
-      {showWa && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setShowWa(false)}>
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-sm" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4"><h2 className="text-lg font-semibold text-gray-100">WhatsApp connection</h2><button onClick={() => setShowWa(false)} className="text-gray-500 hover:text-gray-200">✕</button></div>
-            <div className="flex flex-col items-center gap-4">
-              <span className={`inline-flex items-center gap-2 text-sm px-3 py-1 rounded-full border ${status.state === 'open' ? 'bg-green-950 border-green-700 text-green-300' : status.state === 'connecting' ? 'bg-yellow-950 border-yellow-700 text-yellow-300' : 'bg-gray-900 border-gray-700 text-gray-400'}`}>{status.state === 'open' ? 'Connected' : status.state === 'connecting' ? 'Awaiting scan' : 'Disconnected'}</span>
-              {status.state === 'open' ? (
-                <><p className="text-sm text-gray-400 text-center">A number is linked. To switch numbers, disconnect and scan a fresh QR.</p>
-                  <button onClick={relinkWa} disabled={relinking} className="w-full bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-lg">{relinking ? 'Disconnecting…' : 'Link a different number'}</button></>
-              ) : status.qr ? (
-                <><p className="text-sm text-gray-400 text-center">WhatsApp → Linked devices → Link a device, then scan:</p><img src={status.qr} alt="QR" className="w-56 h-56 rounded-lg bg-white p-1" /></>
-              ) : (
-                <><p className="text-sm text-gray-400 text-center">Not connected. Generate a QR to link a number.</p>
-                  <button onClick={connectWa} disabled={relinking} className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-lg">{relinking ? 'Starting…' : 'Generate QR / Connect'}</button></>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {showWa && <Numbers numbers={status.numbers || []} onClose={() => setShowWa(false)} showToast={showToast} refresh={fetchStatus} />}
 
       {showSettings && <Settings onClose={() => setShowSettings(false)} showToast={showToast} />}
 

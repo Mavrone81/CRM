@@ -371,10 +371,21 @@ async function parseOnboardingChoice(text, sessions) {
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let sock = null;
-let connectionState = 'close'; // 'close' | 'connecting' | 'open'
-let currentQR = null;           // base64 QR image
-let waReconnects = 0;           // consecutive reconnect failures — halt when blocked/banned
+// ── Multi-number WhatsApp: each linked number is an independent socket ───────────
+const conns = new Map(); // numId -> { sock, state, qr, reconnects, label }
+function numbersCfg() {
+  const n = readConfig().numbers;
+  return (n && n.length) ? n : [{ id: 'n1', label: 'Number 1' }];
+}
+const connState = (id) => conns.get(id)?.state || 'close';
+const anyOpen = () => [...conns.values()].some((c) => c.state === 'open');
+// The socket to send a lead's message through (its sticky number, else any open one).
+function sockForLead(lead) {
+  const c = lead?.assignedNumber && conns.get(lead.assignedNumber);
+  if (c && c.state === 'open') return c.sock;
+  return ([...conns.values()].find((x) => x.state === 'open') || {}).sock || null;
+}
+const firstSock = () => ([...conns.values()].find((c) => c.state === 'open') || {}).sock;
 
 // Outgoing/seen message store so we can answer decryption-retry requests. Without
 // this, recipients who can't decrypt a message (common after a reconnect) stay
@@ -451,13 +462,14 @@ function messageText(msg) {
 }
 
 // ── WhatsApp ──────────────────────────────────────────────────────────────────
-async function connectWA() {
-  const { state, saveCreds } = await useMultiFileAuthState(
-    join(__dirname, 'sessions')
-  );
+async function connectNumber(numId) {
+  const label = (numbersCfg().find((n) => n.id === numId) || {}).label || numId;
+  const dir = join(__dirname, 'sessions', numId);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  const { state, saveCreds } = await useMultiFileAuthState(dir);
   const { version } = await fetchLatestBaileysVersion();
 
-  sock = makeWASocket({
+  const sock = makeWASocket({
     version,
     auth: state,
     logger: pino({ level: 'silent' }),
@@ -471,6 +483,10 @@ async function connectWA() {
     // "Waiting for this message" — re-encrypt and resend the original.
     getMessage: async (key) => msgStore.get(key.id) || undefined,
   });
+
+  const c = conns.get(numId) || { reconnects: 0 };
+  c.sock = sock; c.label = label; c.state = 'connecting'; c.qr = null;
+  conns.set(numId, c);
 
   sock.ev.on('creds.update', saveCreds);
 
@@ -560,8 +576,10 @@ async function connectWA() {
       if (!lead.replies) lead.replies = [];
       lead.replies.push({ text, timestamp: new Date().toISOString() });
       lead.needsReply = true; // new inbound awaiting a human — drives the "new reply" badge
+      if (!lead.assignedNumber) lead.assignedNumber = numId; // sticky: bind lead to this number
+      if (!lead.channel) lead.channel = 'whatsapp';
       saveLeads(leads);
-      console.log(`[reply] ${lead.name}: ${text}`);
+      console.log(`[reply:${numId}] ${lead.name}: ${text}`);
 
       // Re-read fresh to avoid stomping concurrent writes.
       const fresh = readLeads();
@@ -627,51 +645,27 @@ async function connectWA() {
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      currentQR = await qrcode.toDataURL(qr);
-      connectionState = 'connecting';
-      console.log('[WA] QR generated — scan in dashboard');
-    }
-
-    if (connection === 'open') {
-      connectionState = 'open';
-      currentQR = null;
-      waReconnects = 0; // healthy connection — reset the failure counter
-      console.log('[WA] Connected');
-    }
-
+    const cc = conns.get(numId);
+    if (!cc) return;
+    if (qr) { cc.qr = await qrcode.toDataURL(qr); cc.state = 'connecting'; console.log(`[WA:${label}] QR generated`); }
+    if (connection === 'open') { cc.state = 'open'; cc.qr = null; cc.reconnects = 0; console.log(`[WA:${label}] Connected`); }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
-      connectionState = 'close';
-      currentQR = null;
-      console.log('[WA] Disconnected, code:', code);
-
+      cc.state = 'close'; cc.qr = null;
+      console.log(`[WA:${label}] Disconnected, code: ${code}`);
       if (code === DisconnectReason.loggedOut) {
-        console.log('[WA] Session ended (logged out) — clearing session for fresh QR');
-        try {
-          const files = readdirSync(join(__dirname, 'sessions'));
-          for (const f of files) rmSync(join(__dirname, 'sessions', f), { recursive: true, force: true });
-        } catch {}
+        try { for (const f of readdirSync(dir)) rmSync(join(dir, f), { recursive: true, force: true }); } catch {}
       }
-
-      // STOP hammering a blocked/banned endpoint. 403 = WhatsApp has blocked this
-      // number/device; also halt after repeated failures. Re-link to retry.
-      if (code === 403 || code === DisconnectReason.forbidden) {
-        console.log('[WA] 403 Forbidden — number/device is BLOCKED by WhatsApp. Halting reconnects (re-link from the dashboard to retry).');
-        return;
-      }
-      if (++waReconnects > 8) {
-        console.log(`[WA] reconnect failed ${waReconnects}x — halting (re-link to retry).`);
-        return;
-      }
-      console.log(`[WA] Reconnecting in 5s… (attempt ${waReconnects})`);
-      setTimeout(connectWA, 5000);
+      if (code === 403 || code === DisconnectReason.forbidden) { cc.state = 'banned'; console.log(`[WA:${label}] 403 BLOCKED by WhatsApp — halting (relink to retry).`); return; }
+      if (++cc.reconnects > 8) { console.log(`[WA:${label}] reconnect failed ${cc.reconnects}x — halting.`); return; }
+      console.log(`[WA:${label}] Reconnecting in 5s… (attempt ${cc.reconnects})`);
+      setTimeout(() => connectNumber(numId), 5000);
     }
   });
 }
 
-connectWA();
+// Connect all configured numbers on boot.
+for (const n of numbersCfg()) connectNumber(n.id).catch((e) => console.error('[wa] connect failed', n.id, e.message));
 
 // ── Express ───────────────────────────────────────────────────────────────────
 const app = express();
@@ -680,7 +674,10 @@ app.use(express.json({ limit: '15mb' })); // base64 document uploads
 
 // Status + QR
 app.get('/api/status', (_req, res) => {
-  res.json({ state: connectionState, qr: currentQR, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername } });
+  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null }; });
+  const state = anyOpen() ? 'open' : (numbers.some((n) => n.state === 'connecting') ? 'connecting' : 'close');
+  const qr = (numbers.find((n) => n.state === 'connecting' && n.qr) || {}).qr || null;
+  res.json({ state, qr, numbers, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername } });
 });
 
 // Toggle auto-reply (bot) mode on/off
@@ -711,7 +708,7 @@ app.post('/api/classify/all', async (_req, res) => {
 // Send a free-text reply to a lead (e.g. the AI-suggested reply).
 // Does NOT touch the outreach `sent` flag — this is a follow-up message.
 app.post('/api/reply/:id', async (req, res) => {
-  if (connectionState !== 'open') {
+  if (!anyOpen()) {
     return res.status(503).json({ error: 'WhatsApp not connected' });
   }
   const message = (req.body.message || '').trim();
@@ -725,7 +722,7 @@ app.post('/api/reply/:id', async (req, res) => {
   if (!jid) return res.status(400).json({ error: 'invalid phone number' });
 
   try {
-    await sock.sendMessage(jid, { text: message });
+    await firstSock().sendMessage(jid, { text: message });
     if (!lead.sentReplies) lead.sentReplies = [];
     lead.sentReplies.push({ text: message, timestamp: new Date().toISOString() });
     saveLeads(leads);
@@ -784,7 +781,7 @@ const BATCH_SIZE = 40;
 const BATCH_PAUSE = 30000; // 30s between batches
 
 app.post('/api/send/bulk', async (req, res) => {
-  if (connectionState !== 'open') {
+  if (!anyOpen()) {
     return res.status(503).json({ error: 'WhatsApp not connected' });
   }
   const { ids, message: customMessage } = req.body;
@@ -814,7 +811,7 @@ app.post('/api/send/bulk', async (req, res) => {
       const message = customMessage || buildMessage(lead.name);
 
       try {
-        await sock.sendMessage(jid, { text: message });
+        await firstSock().sendMessage(jid, { text: message });
         lead.sent = true;
         lead.sentAt = new Date().toISOString();
         results.push({ id, ok: true });
@@ -839,7 +836,7 @@ app.post('/api/send/bulk', async (req, res) => {
 
 // Send to one lead
 app.post('/api/send/:id', async (req, res) => {
-  if (connectionState !== 'open') {
+  if (!anyOpen()) {
     return res.status(503).json({ error: 'WhatsApp not connected' });
   }
   const leads = readLeads();
@@ -852,7 +849,7 @@ app.post('/api/send/:id', async (req, res) => {
   const message = req.body.message || buildMessage(lead.name);
 
   try {
-    await sock.sendMessage(jid, { text: message });
+    await firstSock().sendMessage(jid, { text: message });
     lead.sent = true;
     lead.sentAt = new Date().toISOString();
     saveLeads(leads);
@@ -865,17 +862,48 @@ app.post('/api/send/:id', async (req, res) => {
 
 // Logout + unlink: clears the stored session so the reconnect shows a fresh QR
 // to link a different number. (The connection.update handler does the reconnect.)
+// Relink a number: clear its session + reconnect (fresh QR). Used after a block.
+async function relinkNumber(numId) {
+  const c = conns.get(numId);
+  try { if (c?.sock) await c.sock.logout().catch(() => {}); } catch {}
+  try { const dir = join(__dirname, 'sessions', numId); for (const f of readdirSync(dir)) rmSync(join(dir, f), { recursive: true, force: true }); } catch {}
+  if (c) { c.state = 'close'; c.qr = null; c.reconnects = 0; }
+  setTimeout(() => connectNumber(numId), 1000);
+}
+
+// Legacy single re-link (dashboard pill) -> relink the first number.
 app.post('/api/logout', async (_req, res) => {
-  try { if (sock) await sock.logout().catch(() => {}); } catch {}
-  try {
-    const dir = join(__dirname, 'sessions');
-    for (const f of readdirSync(dir)) rmSync(join(dir, f), { recursive: true, force: true });
-  } catch {}
-  sock = null;
-  connectionState = 'close';
-  currentQR = null;
-  waReconnects = 0;
-  setTimeout(connectWA, 1000); // restart the connection attempt (re-link after a halt)
+  await relinkNumber(numbersCfg()[0].id);
+  res.json({ ok: true });
+});
+
+// ── Numbers management (multi-number) ───────────────────────────────────────────
+const numberView = (n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null }; };
+app.get('/api/numbers', (_req, res) => res.json(numbersCfg().map(numberView)));
+
+app.post('/api/numbers', (req, res) => {
+  const nums = numbersCfg();
+  if (nums.length >= 10) return res.status(400).json({ error: 'max 10 numbers' });
+  const id = 'n' + Date.now().toString(36);
+  const label = (req.body.label || `Number ${nums.length + 1}`).trim();
+  writeConfig({ ...readConfig(), numbers: [...nums, { id, label }] });
+  connectNumber(id).catch((e) => console.error('[wa] connect failed', id, e.message));
+  res.status(201).json({ id, label });
+});
+
+app.post('/api/numbers/:id/relink', async (req, res) => {
+  if (!numbersCfg().find((n) => n.id === req.params.id)) return res.status(404).json({ error: 'not found' });
+  await relinkNumber(req.params.id);
+  res.json({ ok: true });
+});
+
+app.delete('/api/numbers/:id', async (req, res) => {
+  const id = req.params.id;
+  const c = conns.get(id);
+  try { if (c?.sock) await c.sock.logout().catch(() => {}); } catch {}
+  try { const dir = join(__dirname, 'sessions', id); rmSync(dir, { recursive: true, force: true }); } catch {}
+  conns.delete(id);
+  writeConfig({ ...readConfig(), numbers: numbersCfg().filter((n) => n.id !== id) });
   res.json({ ok: true });
 });
 
@@ -943,14 +971,14 @@ async function sendDocumentsTo(jid, docs, caption) {
   for (let i = 0; i < docs.length; i++) {
     const d = docs[i];
     const buf = readFileSync(join(DOCS_DIR, d.file));
-    await sock.sendMessage(jid, { document: buf, fileName: d.name, mimetype: d.mimetype || 'application/pdf', caption: i === 0 ? caption : undefined });
+    await firstSock().sendMessage(jid, { document: buf, fileName: d.name, mimetype: d.mimetype || 'application/pdf', caption: i === 0 ? caption : undefined });
     if (i < docs.length - 1) await new Promise((r) => setTimeout(r, 1500));
   }
 }
 
 // Send the personalised brief invite -> stage 'brief'
 app.post('/api/wf/invite/:id', async (req, res) => {
-  if (connectionState !== 'open') return res.status(503).json({ error: 'WhatsApp not connected' });
+  if (!anyOpen()) return res.status(503).json({ error: 'WhatsApp not connected' });
   const message = (req.body.message || '').trim();
   if (!message) return res.status(400).json({ error: 'message required' });
   const leads = readLeads();
@@ -959,7 +987,7 @@ app.post('/api/wf/invite/:id', async (req, res) => {
   const jid = toJid(lead.phone);
   if (!jid) return res.status(400).json({ error: 'invalid phone number' });
   try {
-    await sock.sendMessage(jid, { text: message });
+    await firstSock().sendMessage(jid, { text: message });
     const ts = new Date().toISOString();
     lead.stage = 'brief';
     lead.wf = { ...(lead.wf || {}), enteredAt: lead.wf?.enteredAt || ts, invitedAt: ts, inviteText: message };
@@ -1017,7 +1045,7 @@ app.post('/api/wf/attend/:id', (req, res) => {
 
 // Send the agreement document(s) over WhatsApp -> stage 'agreement_sent'
 app.post('/api/wf/agreement/:id', async (req, res) => {
-  if (connectionState !== 'open') return res.status(503).json({ error: 'WhatsApp not connected' });
+  if (!anyOpen()) return res.status(503).json({ error: 'WhatsApp not connected' });
   const leads = readLeads();
   const lead = findLead(leads, req.params.id);
   if (!lead) return res.status(404).json({ error: 'not found' });

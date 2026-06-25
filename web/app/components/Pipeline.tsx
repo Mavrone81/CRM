@@ -77,6 +77,16 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
           {lastReplyOf(l) && <span>Replied: <span className="text-gray-400">{relTime(lastReplyOf(l))}</span></span>}
         </div>
 
+        {/* AI-recommended reply / invite — Send (Telegram) or Copy (send from phone) */}
+        {l.ai?.suggested_reply && (
+          <div className="text-xs bg-gray-950/60 border border-gray-800 rounded-lg p-2 flex items-start gap-2">
+            <span className="text-purple-300 whitespace-nowrap">Suggested:</span>
+            <span className="text-gray-300 flex-1">{l.ai.suggested_reply}</span>
+            {l.channel === 'telegram' && <button onClick={() => act(l.id, () => sendReply(l.id, l.ai!.suggested_reply), `Sent to ${l.name}`)} disabled={b} className="text-green-400 hover:text-green-300 whitespace-nowrap font-medium">Send</button>}
+            <button onClick={() => { navigator.clipboard.writeText(l.ai!.suggested_reply); showToast('Copied'); }} className="text-gray-400 hover:text-gray-200 whitespace-nowrap">Copy</button>
+          </div>
+        )}
+
         {/* Agreement: show signed-validation result */}
         {l.status === 'agreement' && l.wf?.signed && (() => { const r = l.wf.signed.result; return (
           <div className={`text-xs rounded-lg px-2 py-1.5 border ${r?.complete ? 'border-green-700 bg-green-950/30 text-green-300' : 'border-amber-800 bg-amber-950/20 text-amber-300'}`}>
