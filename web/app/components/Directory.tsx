@@ -57,7 +57,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
   const [search, setSearch] = useState('');
   const [group, setGroup] = useState('all');
   const [statusFilter, setStatusFilter] = useState<Status | 'all'>('all');
-  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'name', dir: 1 });
+  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'status', dir: 1 });
   // Count of leads per status (drives the status-workflow chips).
   const statusCount: Record<string, number> = {};
   leads.forEach((l) => { const s = (l.status || 'new'); statusCount[s] = (statusCount[s] || 0) + 1; });
