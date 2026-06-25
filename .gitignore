@@ -16,3 +16,5 @@ server/data/config.json
 # Uploaded documents (agreements etc.) — server-managed, bind-mounted, never commit
 server/data/documents/
 server/data/documents.json
+
+server/data/*.bak.*

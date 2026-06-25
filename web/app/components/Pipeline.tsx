@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import type { Lead, WaStatus, Config, Session } from './types';
 import type { Status } from './status';
 import { PIPELINE_ORDER, STATUS_META } from './status';
-import { sessionDisplay } from './types';
+import { sessionDisplay, relTime, lastContactOf, lastReplyOf } from './types';
 import { API, setStatus, logReply } from './leadApi';
 
 // Tabs across the pipeline. Some statuses need a session pick to advance.
@@ -21,14 +21,15 @@ const TABS: { key: Status; hint: string }[] = [
   { key: 'onboarded', hint: 'Sales Reps ✅' },
 ];
 
-// next status for the primary "advance" button (those needing a session are handled inline)
-const NEXT: Partial<Record<Status, { to: Status; label: string }>> = {
-  interested: { to: 'invited', label: 'Mark invite sent' },
+// next status for the primary "advance" button (those needing a session are handled inline).
+// `contacts: true` means the action is us messaging them → record a last-contacted time.
+const NEXT: Partial<Record<Status, { to: Status; label: string; contacts?: boolean }>> = {
+  interested: { to: 'invited', label: 'Mark invite sent', contacts: true },
   invited: { to: 'confirmed', label: 'Mark confirmed' },
   scheduled: { to: 'attended', label: 'Mark attended' },
-  attended: { to: 'agreement', label: 'Mark agreement sent' },
+  attended: { to: 'agreement', label: 'Mark agreement sent', contacts: true },
   agreement: { to: 'signed', label: 'Mark signed' },
-  signed: { to: 'onboarding', label: 'Mark onboarding offer sent' },
+  signed: { to: 'onboarding', label: 'Mark onboarding offer sent', contacts: true },
   booked: { to: 'onboarded', label: 'Mark onboarded' },
 };
 
@@ -68,6 +69,10 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
           {l.needsReply && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new reply</span>}
         </div>
         {lr && <p className="text-xs text-gray-400 bg-gray-800/60 rounded-lg px-2 py-1.5 line-clamp-2">“{lr.text}”</p>}
+        <div className="flex gap-3 text-[11px] text-gray-500">
+          <span>Contacted: <span className="text-gray-400">{relTime(lastContactOf(l)) || 'never'}</span></span>
+          {lastReplyOf(l) && <span>Replied: <span className="text-gray-400">{relTime(lastReplyOf(l))}</span></span>}
+        </div>
 
         {/* Agreement: show signed-validation result */}
         {l.status === 'agreement' && l.wf?.signed && (() => { const r = l.wf.signed.result; return (
@@ -84,7 +89,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
         {/* Session assignment for confirmed -> scheduled, onboarding -> booked */}
         {(l.status === 'confirmed' || l.status === 'onboarding') && (
           <select defaultValue="" disabled={b}
-            onChange={(e) => e.target.value && act(l.id, () => setStatus(l.id, l.status === 'confirmed' ? 'scheduled' : 'booked', e.target.value), `${l.name} booked`)}
+            onChange={(e) => e.target.value && act(l.id, () => setStatus(l.id, l.status === 'confirmed' ? 'scheduled' : 'booked', { session: e.target.value }), `${l.name} booked`)}
             className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-green-600">
             <option value="" disabled>Assign session…</option>
             {(config?.sessions || []).map((s) => <option key={s.id} value={s.id}>{sessionDisplay(s)} ({sessionCount(s.id)}/{s.capacity})</option>)}
@@ -92,7 +97,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
         )}
 
         <div className="flex gap-2 flex-wrap">
-          {next && <button onClick={() => act(l.id, () => setStatus(l.id, next.to), `${l.name}: ${next.label}`)} disabled={b}
+          {next && <button onClick={() => act(l.id, () => setStatus(l.id, next.to, next.contacts ? { contacted: true } : undefined), `${l.name}: ${next.label}`)} disabled={b}
             className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">{b ? '…' : next.label}</button>}
           <button onClick={() => { setReplyFor(replyFor === l.id ? null : l.id); setReplyText(''); }} className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1.5">Log reply</button>
           <select value="" onChange={(e) => { if (e.target.value) act(l.id, () => setStatus(l.id, e.target.value as Status), `Moved ${l.name}`); }}

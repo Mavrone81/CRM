@@ -12,9 +12,10 @@ async function post(path: string, body?: unknown) {
   return { ok: r.ok, data: await r.json().catch(() => ({})) };
 }
 
-// The ONE canonical transition. Optionally attach a session id.
-export const setStatus = (id: number, status: Status, session?: string | null) =>
-  post(`/leads/${id}/status`, session !== undefined ? { status, session } : { status });
+// The ONE canonical transition. opts.session attaches a session; opts.contacted
+// records a "last contacted" timestamp (used by the manual "Mark … sent" actions).
+export const setStatus = (id: number, status: Status, opts?: { session?: string | null; contacted?: boolean }) =>
+  post(`/leads/${id}/status`, { status, ...opts });
 
 // Clear the "new reply" flag without changing status.
 export const ackLead = (id: number) => post(`/leads/${id}/ack`);

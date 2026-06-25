@@ -1044,6 +1044,7 @@ app.post('/api/leads/:id/status', (req, res) => {
   if (!lead) return res.status(404).json({ error: 'not found' });
   lead.status = status;
   lead.needsReply = false;
+  if (req.body.contacted) lead.lastContactedAt = new Date().toISOString(); // "mark sent" = we contacted them
   if (req.body.session !== undefined) lead.wf = { ...(lead.wf || {}), session: req.body.session };
   saveLeads(leads);
   res.json({ ok: true, lead });

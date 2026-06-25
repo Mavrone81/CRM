@@ -66,7 +66,32 @@ export type Lead = {
   role?: Role;
   status?: import('./status').Status; // canonical lifecycle state
   needsReply?: boolean;               // new inbound awaiting a human
+  lastContactedAt?: string;           // last time WE messaged them (manual or bot)
 };
+
+// "3d ago" style relative time.
+export function relTime(ts?: string | null): string {
+  if (!ts) return '';
+  const d = Date.now() - new Date(ts).getTime();
+  if (d < 0) return 'just now';
+  const m = Math.floor(d / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const days = Math.floor(h / 24);
+  return days < 30 ? `${days}d ago` : `${Math.floor(days / 30)}mo ago`;
+}
+
+const maxTs = (arr: (string | undefined)[]) => {
+  const t = arr.filter(Boolean).map((x) => new Date(x as string).getTime()).filter((n) => !isNaN(n));
+  return t.length ? new Date(Math.max(...t)).toISOString() : null;
+};
+// Last time we contacted them (outbound: initial outreach, logged sends, manual mark-sent).
+export const lastContactOf = (l: Lead): string | null =>
+  maxTs([l.lastContactedAt, l.sentAt || undefined, ...(l.sentReplies || []).map((r) => r.timestamp)]);
+// Last time they replied (inbound).
+export const lastReplyOf = (l: Lead): string | null => maxTs((l.replies || []).map((r) => r.timestamp));
 
 export type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean; autoReply?: boolean };
 

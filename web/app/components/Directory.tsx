@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import type { Lead } from './types';
 import type { Status } from './status';
 import { ALL_STATUSES, STATUS_META } from './status';
+import { relTime, lastContactOf, lastReplyOf } from './types';
 import { API, logReply, setStatus } from './leadApi';
 
 const GROUPS: { key: string; label: string }[] = [
@@ -62,7 +63,7 @@ export default function Directory({ leads, showToast, refresh }: { leads: Lead[]
             <tr>
               <th className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium">Name</th>
               <th className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium">Phone</th>
-              <th className="px-4 py-3 text-left text-gray-400 font-medium hidden md:table-cell">Last reply</th>
+              <th className="px-4 py-3 text-left text-gray-400 font-medium hidden md:table-cell">Activity</th>
               <th className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium">Status</th>
               <th className="px-4 py-3 text-right text-gray-400 font-medium">Action</th>
             </tr>
@@ -80,7 +81,10 @@ export default function Directory({ leads, showToast, refresh }: { leads: Lead[]
                       <div className="text-xs text-gray-500 truncate max-w-[160px] sm:max-w-none">{l.email}</div>
                     </td>
                     <td className="px-3 sm:px-4 py-3 text-gray-300 font-mono text-xs whitespace-nowrap">{l.phone}</td>
-                    <td className="px-4 py-3 hidden md:table-cell text-xs text-gray-500 max-w-[240px] truncate">{lr ? `“${lr.text}”` : '—'}</td>
+                    <td className="px-4 py-3 hidden md:table-cell text-xs max-w-[240px]">
+                      <div className="text-gray-400">contacted {relTime(lastContactOf(l)) || 'never'}{lastReplyOf(l) ? ` · replied ${relTime(lastReplyOf(l))}` : ''}</div>
+                      <div className="text-gray-600 truncate">{lr ? `“${lr.text}”` : 'no reply yet'}</div>
+                    </td>
                     <td className="px-3 sm:px-4 py-3">
                       <select value={s} onChange={(e) => change(l.id, e.target.value as Status)} className={`text-xs rounded-full border px-2 py-1 focus:outline-none cursor-pointer ${meta.chip}`}>
                         {ALL_STATUSES.map((opt) => <option key={opt} value={opt} className="bg-gray-900 text-gray-200">{STATUS_META[opt].label}</option>)}
