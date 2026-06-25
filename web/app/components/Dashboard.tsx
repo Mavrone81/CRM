@@ -84,7 +84,7 @@ export default function Dashboard() {
         {view === 'analytics' && <Analytics leads={leads} />}
       </div>
 
-      {showWa && <Numbers numbers={status.numbers || []} onClose={() => setShowWa(false)} showToast={showToast} refresh={fetchStatus} />}
+      {showWa && <Numbers numbers={status.numbers || []} outreach={status.outreach} onClose={() => setShowWa(false)} showToast={showToast} refresh={fetchStatus} />}
 
       {showSettings && <Settings onClose={() => setShowSettings(false)} showToast={showToast} />}
 

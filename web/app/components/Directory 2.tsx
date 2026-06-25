@@ -9,8 +9,9 @@ import { API, logReply, setStatus, updateLead } from './leadApi';
 
 const GROUPS: { key: string; label: string }[] = [
   { key: 'all', label: 'All' },
-  { key: 'outreach', label: 'Outreach' },
+  { key: 'inbox', label: 'Inbox' },
   { key: 'pipeline', label: 'Pipeline' },
+  { key: 'outreach', label: 'Outreach' },
   { key: 'closed', label: 'Closed' },
 ];
 
@@ -81,22 +82,6 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
       const d = await r.json().catch(() => ({}));
       if (r.ok) { setImportResult(d); refresh(); } else showToast(d.error || 'Import failed', false);
     } catch { showToast('Could not read the file', false); } finally { setImporting(false); }
-  };
-
-  const [selected, setSelected] = useState<Set<number>>(new Set());
-  const toggleSel = (id: number) => setSelected((p) => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
-  const bulk = async (action: string, raw: string) => {
-    if (!raw) return; // ignore the disabled placeholder
-    const value = raw === '__none__' ? '' : raw;
-    const r = await fetch(`${API}/leads/bulk`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [...selected], action, value }) });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok) { showToast(`Updated ${d.updated} lead(s)`); setSelected(new Set()); refresh(); } else showToast(d.error || 'Failed', false);
-  };
-  const bulkOutreach = async () => {
-    if (!confirm(`Start paced outreach to ${selected.size} selected lead(s)? Sends a varied opening to each, ~20–50s apart, within each number's daily cap.`)) return;
-    const r = await fetch(`${API}/outreach/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: [...selected] }) });
-    const d = await r.json().catch(() => ({}));
-    if (r.ok) { showToast(`Outreach started — ${d.queued} queued`); setSelected(new Set()); } else showToast(d.error || 'Failed', false);
   };
 
   const numLabel = (id?: string) => numbers.find((n) => n.id === id)?.label || (id ? id : '—');
@@ -183,28 +168,10 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
         ))}
       </div>
 
-      {selected.size > 0 && (
-        <div className="px-4 sm:px-6 py-2 border-b border-gray-800 bg-gray-900/70 flex flex-wrap items-center gap-2 text-xs">
-          <span className="text-gray-200 font-medium whitespace-nowrap">{selected.size} selected</span>
-          <select defaultValue="" onChange={(e) => { bulk('status', e.target.value); e.target.value = ''; }} className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-gray-200 focus:outline-none focus:border-green-600">
-            <option value="" disabled>Set status…</option>
-            {ALL_STATUSES.map((s) => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
-          </select>
-          <select defaultValue="" onChange={(e) => { bulk('assign', e.target.value); e.target.value = ''; }} className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-gray-200 focus:outline-none focus:border-green-600">
-            <option value="" disabled>Assign number…</option>
-            <option value="__none__">— none / auto —</option>
-            {numbers.map((n) => <option key={n.id} value={n.id}>{n.label}</option>)}
-          </select>
-          <button onClick={bulkOutreach} className="bg-green-700 hover:bg-green-600 text-white px-3 py-1.5 rounded-lg font-medium whitespace-nowrap">Start outreach</button>
-          <button onClick={() => setSelected(new Set())} className="text-gray-400 hover:text-gray-200 px-2 py-1.5 ml-auto">Clear</button>
-        </div>
-      )}
-
       <div className="flex-1 overflow-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-gray-950 border-b border-gray-800">
             <tr>
-              <th className="pl-3 sm:pl-4 py-3 w-8"><input type="checkbox" checked={sorted.length > 0 && sorted.every((l) => selected.has(l.id))} onChange={(e) => setSelected((p) => { const n = new Set(p); if (e.target.checked) sorted.forEach((l) => n.add(l.id)); else sorted.forEach((l) => n.delete(l.id)); return n; })} className="align-middle cursor-pointer" /></th>
               <th onClick={() => sortBy('name')} className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium cursor-pointer hover:text-gray-200 select-none">Name{arrow('name')}</th>
               <th onClick={() => sortBy('phone')} className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium cursor-pointer hover:text-gray-200 select-none">Phone{arrow('phone')}</th>
               <th onClick={() => sortBy('activity')} className="px-4 py-3 text-left text-gray-400 font-medium hidden md:table-cell cursor-pointer hover:text-gray-200 select-none">Activity{arrow('activity')}</th>
@@ -219,8 +186,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
               const lr = l.replies?.[l.replies.length - 1];
               return (
                 <React.Fragment key={l.id}>
-                  <tr className={`hover:bg-gray-900/50 ${selected.has(l.id) ? 'bg-gray-900/40' : ''}`}>
-                    <td className="pl-3 sm:pl-4 py-3 w-8"><input type="checkbox" checked={selected.has(l.id)} onChange={() => toggleSel(l.id)} className="align-middle cursor-pointer" /></td>
+                  <tr className="hover:bg-gray-900/50">
                     <td className="px-3 sm:px-4 py-3">
                       <div className="font-medium text-gray-100 flex items-center gap-1.5">{l.name}{l.needsReply && <span className="text-[10px] px-1.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new</span>}</div>
                       <div className="text-xs text-gray-500 truncate max-w-[160px] sm:max-w-none">{l.email}</div>
@@ -244,7 +210,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                     </td>
                   </tr>
                   {replyFor === l.id && (
-                    <tr className="bg-gray-900/40"><td colSpan={6} className="px-4 py-2">
+                    <tr className="bg-gray-900/40"><td colSpan={5} className="px-4 py-2">
                       <div className="flex gap-2">
                         <input value={replyText} onChange={(e) => setReplyText(e.target.value)} placeholder={`What ${l.name} said…`} autoFocus className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
                         <button onClick={async () => { if (!replyText.trim()) return; const { ok } = await logReply(l.id, replyText.trim()); if (ok) { showToast('Reply logged + classified'); setReplyFor(null); refresh(); } }} className="bg-blue-700 hover:bg-blue-600 text-white text-sm px-3 py-2 rounded-lg">Save</button>
@@ -254,7 +220,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                 </React.Fragment>
               );
             })}
-            {sorted.length === 0 && <tr><td colSpan={6} className="px-4 py-16 text-center text-gray-600">No leads match.</td></tr>}
+            {sorted.length === 0 && <tr><td colSpan={5} className="px-4 py-16 text-center text-gray-600">No leads match.</td></tr>}
           </tbody>
         </table>
       </div>

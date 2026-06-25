@@ -387,6 +387,71 @@ function sockForLead(lead) {
 }
 const firstSock = () => ([...conns.values()].find((c) => c.state === 'open') || {}).sock;
 
+// ── Per-number guardrails: daily caps + warming ─────────────────────────────────
+const DEFAULT_CAP = 40;
+const todayStr = () => new Date().toISOString().slice(0, 10);
+// Warming ramp: a freshly-added number starts at 10/day and grows +10/day to its
+// cap. Pre-existing numbers (no addedAt) are treated as fully warm.
+function warmCap(num) {
+  const cap = num.dailyCap || DEFAULT_CAP;
+  if (!num.addedAt) return cap;
+  const days = Math.floor((Date.now() - new Date(num.addedAt).getTime()) / 86400000);
+  return Math.max(10, Math.min(cap, 10 + days * 10));
+}
+// How many WhatsApp messages this number has sent today (derived from leads).
+function sentTodayFor(numId, leads) {
+  const d = todayStr();
+  let n = 0;
+  for (const l of leads) {
+    if (l.assignedNumber !== numId) continue;
+    for (const s of (l.sentReplies || [])) if (s.channel === 'whatsapp' && (s.timestamp || '').slice(0, 10) === d) n++;
+  }
+  return n;
+}
+// A number that can take an outbound send right now: connected + under its cap.
+function numbersWithCapacity(leads) {
+  return numbersCfg().filter((n) => conns.get(n.id)?.state === 'open' && sentTodayFor(n.id, leads) < warmCap(n));
+}
+
+// ── Sequenced bulk outreach (paced, cap-aware, auto-failover) ───────────────────
+const outreach = { running: false, queue: [], sent: 0, failed: 0, startedAt: null };
+async function outreachTick() {
+  if (!outreach.running) return;
+  if (!outreach.queue.length) { outreach.running = false; console.log(`[outreach] complete — ${outreach.sent} sent`); return; }
+  const leads = readLeads();
+  const capacity = numbersWithCapacity(leads);
+  if (!capacity.length) { console.log('[outreach] all numbers capped/offline — pausing'); outreach.running = false; return; }
+
+  // Pick the next queued lead and assign it the healthiest number with capacity
+  // (fewest sent today → balances load + auto-fails-over off blocked numbers).
+  const leadId = outreach.queue.shift();
+  const lead = leads.find((l) => l.id === leadId);
+  if (!lead || !toJid(lead.phone)) { outreach.failed++; return setTimeout(outreachTick, 200); }
+  capacity.sort((a, b) => sentTodayFor(a.id, leads) - sentTodayFor(b.id, leads));
+  let numId = lead.assignedNumber;
+  if (!numId || !capacity.find((n) => n.id === numId)) numId = capacity[0].id;
+  lead.assignedNumber = numId;
+
+  try {
+    const sock = conns.get(numId)?.sock;
+    const text = buildMessage(lead.name); // spintax opening — varied every send
+    await sock.sendMessage(toJid(lead.phone), { text });
+    lead.sentReplies = lead.sentReplies || [];
+    lead.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'whatsapp' });
+    lead.lastContactedAt = new Date().toISOString();
+    lead.sent = true; lead.sentAt = lead.sentAt || new Date().toISOString();
+    if (lead.status === 'new') lead.status = 'contacted';
+    saveLeads(leads);
+    outreach.sent++;
+    console.log(`[outreach] -> ${lead.name} via ${numId} (${outreach.sent} sent · ${outreach.queue.length} left)`);
+  } catch (e) {
+    outreach.failed++;
+    console.error(`[outreach] send failed for ${lead?.name}:`, e.message);
+  }
+  // Human-like pacing: 20–50s jitter between sends (anti-ban).
+  setTimeout(outreachTick, 20000 + Math.floor(Math.random() * 30000));
+}
+
 // Outgoing/seen message store so we can answer decryption-retry requests. Without
 // this, recipients who can't decrypt a message (common after a reconnect) stay
 // stuck on "Waiting for this message" because Baileys can't re-send the original.
@@ -674,10 +739,11 @@ app.use(express.json({ limit: '15mb' })); // base64 document uploads
 
 // Status + QR
 app.get('/api/status', (_req, res) => {
-  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null }; });
+  const leadsForCount = readLeads();
+  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
   const state = anyOpen() ? 'open' : (numbers.some((n) => n.state === 'connecting') ? 'connecting' : 'close');
   const qr = (numbers.find((n) => n.state === 'connecting' && n.qr) || {}).qr || null;
-  res.json({ state, qr, numbers, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername } });
+  res.json({ state, qr, numbers, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername }, outreach: { running: outreach.running, queued: outreach.queue.length, sent: outreach.sent, failed: outreach.failed } });
 });
 
 // Toggle auto-reply (bot) mode on/off
@@ -930,7 +996,7 @@ app.post('/api/numbers', (req, res) => {
   if (nums.length >= 10) return res.status(400).json({ error: 'max 10 numbers' });
   const id = 'n' + Date.now().toString(36);
   const label = (req.body.label || `Number ${nums.length + 1}`).trim();
-  writeConfig({ ...readConfig(), numbers: [...nums, { id, label }] });
+  writeConfig({ ...readConfig(), numbers: [...nums, { id, label, addedAt: new Date().toISOString(), dailyCap: DEFAULT_CAP }] });
   connectNumber(id).catch((e) => console.error('[wa] connect failed', id, e.message));
   res.status(201).json({ id, label });
 });
@@ -968,6 +1034,56 @@ app.post('/api/numbers/distribute', (req, res) => {
   saveLeads(leads);
   console.log(`[distribute] ${eligible.length} leads across ${nums.length} number(s)`);
   res.json({ ok: true, total: eligible.length, numbers: nums.map((n) => ({ id: n.id, label: n.label, count: counts[n.id] || 0 })) });
+});
+
+// Set a number's daily cap (warming still applies on top for new numbers).
+app.patch('/api/numbers/:id', (req, res) => {
+  const nums = numbersCfg();
+  const n = nums.find((x) => x.id === req.params.id);
+  if (!n) return res.status(404).json({ error: 'not found' });
+  if (req.body.dailyCap != null) n.dailyCap = Math.max(1, Math.min(200, Number(req.body.dailyCap) || DEFAULT_CAP));
+  if (typeof req.body.label === 'string' && req.body.label.trim()) n.label = req.body.label.trim();
+  writeConfig({ ...readConfig(), numbers: nums });
+  res.json({ ok: true });
+});
+
+// ── Sequenced outreach control ──────────────────────────────────────────────────
+// Start paced outreach to a set of leads (default: all 'new' WhatsApp leads).
+app.post('/api/outreach/start', (req, res) => {
+  if (outreach.running) return res.status(409).json({ error: 'outreach already running' });
+  const ids = Array.isArray(req.body.leadIds) ? req.body.leadIds : null;
+  const leads = readLeads();
+  let targets = ids ? leads.filter((l) => ids.includes(l.id)) : leads.filter((l) => l.status === 'new' && l.channel !== 'telegram');
+  targets = targets.filter((l) => toJid(l.phone));
+  if (!targets.length) return res.status(400).json({ error: 'no eligible leads (need a valid phone, WhatsApp channel)' });
+  if (!numbersWithCapacity(leads).length) return res.status(503).json({ error: 'no connected number has capacity right now' });
+  outreach.queue = targets.map((l) => l.id);
+  outreach.sent = 0; outreach.failed = 0; outreach.running = true; outreach.startedAt = new Date().toISOString();
+  console.log(`[outreach] starting — ${outreach.queue.length} leads`);
+  setTimeout(outreachTick, 500);
+  res.json({ ok: true, queued: outreach.queue.length });
+});
+app.get('/api/outreach/status', (_req, res) => {
+  const leads = readLeads();
+  res.json({ running: outreach.running, queued: outreach.queue.length, sent: outreach.sent, failed: outreach.failed, startedAt: outreach.startedAt,
+    numbers: numbersCfg().map((n) => ({ id: n.id, label: n.label, sentToday: sentTodayFor(n.id, leads), cap: warmCap(n), dailyCap: n.dailyCap || DEFAULT_CAP, state: conns.get(n.id)?.state || 'close' })) });
+});
+app.post('/api/outreach/stop', (_req, res) => { const left = outreach.queue.length; outreach.running = false; outreach.queue = []; console.log(`[outreach] stopped — ${left} unsent`); res.json({ ok: true, cleared: left }); });
+
+// Bulk lead actions: set status or (re)assign a number for many leads at once.
+app.post('/api/leads/bulk', (req, res) => {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+  const { action, value } = req.body;
+  if (!ids.length) return res.status(400).json({ error: 'no ids' });
+  const leads = readLeads();
+  let updated = 0;
+  for (const l of leads) {
+    if (!ids.includes(l.id)) continue;
+    if (action === 'status' && value) { l.status = value; if (value !== 'new') l.needsReply = false; updated++; }
+    else if (action === 'assign') { l.assignedNumber = value || null; updated++; }
+  }
+  saveLeads(leads);
+  res.json({ ok: true, updated });
 });
 
 // ── Pipeline config (sessions + brief template) ─────────────────────────────────
