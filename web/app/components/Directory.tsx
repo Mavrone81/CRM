@@ -93,7 +93,12 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
     if (r.ok) { showToast(`Updated ${d.updated} lead(s)`); setSelected(new Set()); refresh(); } else showToast(d.error || 'Failed', false);
   };
   const bulkOutreach = async () => {
-    if (!confirm(`Start paced outreach to ${selected.size} selected lead(s)? Sends a varied opening to each, ~20–50s apart, within each number's daily cap.`)) return;
+    const remaining = numbers.filter((n) => n.state === 'open').reduce((s, n) => s + Math.max(0, (n.cap || 40) - (n.sentToday || 0)), 0);
+    const over = selected.size > remaining;
+    const msg = `Start paced outreach to ${selected.size} selected lead(s)?\n\n` +
+      (over ? `⚠ Only ${remaining} can go out today (combined remaining cap across your numbers). The other ${selected.size - remaining} will wait until caps reset or you raise them.\n\n` : `Within today's capacity — ${remaining} sends remaining.\n\n`) +
+      'A varied opening is sent to each, ~20–50s apart.';
+    if (!confirm(msg)) return;
     const r = await fetch(`${API}/outreach/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: [...selected] }) });
     const d = await r.json().catch(() => ({}));
     if (r.ok) { showToast(`Outreach started — ${d.queued} queued`); setSelected(new Set()); } else showToast(d.error || 'Failed', false);

@@ -13,8 +13,10 @@ const STATE_CHIP: Record<string, string> = {
 };
 const STATE_LABEL: Record<string, string> = { open: 'Connected', connecting: 'Scan QR', banned: 'Blocked', close: 'Disconnected' };
 
-export default function Numbers({ numbers, outreach, onClose, showToast, refresh }: { numbers: WaNumber[]; outreach?: Outreach; onClose: () => void; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
+export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, showToast, refresh }: { numbers: WaNumber[]; outreach?: Outreach; newLeadCount?: number; onClose: () => void; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
   const [busy, setBusy] = useState(false);
+  // Combined remaining sends across connected numbers for today.
+  const remainingCap = numbers.filter((n) => n.state === 'open').reduce((s, n) => s + Math.max(0, (n.cap || 40) - (n.sentToday || 0)), 0);
 
   const add = async () => {
     setBusy(true);
@@ -25,7 +27,13 @@ export default function Numbers({ numbers, outreach, onClose, showToast, refresh
   const remove = async (id: string) => { if (!confirm('Remove this number? Its session is cleared.')) return; await fetch(`${API}/numbers/${id}`, { method: 'DELETE' }); showToast('Removed'); refresh(); };
   const setCap = async (id: string, dailyCap: number) => { await fetch(`${API}/numbers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dailyCap }) }); refresh(); };
   const startOutreach = async () => {
-    if (!confirm('Start paced outreach to all NEW leads?\n\nA varied opening is sent to each, ~20–50s apart, spread across your numbers and never exceeding a number\'s daily cap. You can stop anytime.')) return;
+    const over = newLeadCount > remainingCap;
+    const msg = `Start paced outreach to ${newLeadCount} New lead(s)?\n\n` +
+      (over
+        ? `⚠ Only ${remainingCap} can go out today (combined remaining cap across your connected numbers). The other ${newLeadCount - remainingCap} will wait until caps reset tomorrow or you raise them.\n\n`
+        : `Within today's capacity — ${remainingCap} sends remaining across your numbers.\n\n`) +
+      'A varied opening is sent to each, ~20–50s apart. You can stop anytime.';
+    if (!confirm(msg)) return;
     const r = await fetch(`${API}/outreach/start`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const d = await r.json().catch(() => ({}));
     if (r.ok) showToast(`Outreach started — ${d.queued} queued`); else showToast(d.error || 'Failed', false);
@@ -85,7 +93,10 @@ export default function Numbers({ numbers, outreach, onClose, showToast, refresh
                 <button onClick={stopOutreach} className="text-sm bg-red-700 hover:bg-red-600 text-white rounded-lg py-2">Stop outreach</button>
               </>
             ) : (
-              <button onClick={startOutreach} className="text-sm bg-green-700 hover:bg-green-600 text-white font-medium rounded-lg py-2.5">Start outreach to all New leads</button>
+              <>
+                <div className="text-xs text-gray-400 tabular-nums">{newLeadCount} New leads · {remainingCap} sends left today{newLeadCount > remainingCap ? <span className="text-amber-400"> · {newLeadCount - remainingCap} over today&apos;s cap</span> : null}</div>
+                <button onClick={startOutreach} disabled={newLeadCount === 0 || remainingCap === 0} className="text-sm bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white font-medium rounded-lg py-2.5">Start outreach to all New leads</button>
+              </>
             )}
             <p className="text-[11px] text-gray-600">Sends a varied (spintax) opening to each New lead, paced ~20–50s apart across your numbers, never exceeding a number&apos;s daily cap. Auto-skips capped or blocked numbers.</p>
           </div>
