@@ -5,7 +5,7 @@ import type { Lead, WaStatus, Config, Session } from './types';
 import type { Status } from './status';
 import { PIPELINE_ORDER, STATUS_META } from './status';
 import { sessionDisplay, relTime, lastContactOf, lastReplyOf } from './types';
-import { API, setStatus, logReply } from './leadApi';
+import { API, setStatus, logReply, sendReply } from './leadApi';
 
 // Tabs across the pipeline. Some statuses need a session pick to advance.
 const TABS: { key: Status; hint: string }[] = [
@@ -39,6 +39,8 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
   const [busy, setBusy] = useState<Set<number>>(new Set());
   const [replyFor, setReplyFor] = useState<number | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [sendFor, setSendFor] = useState<number | null>(null);
+  const [sendText, setSendText] = useState('');
 
   const loadConfig = useCallback(async () => { try { setConfig(await (await fetch(`${API}/config`)).json()); } catch {} }, []);
   useEffect(() => { loadConfig(); }, [loadConfig]);
@@ -66,6 +68,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-medium text-gray-100 text-sm">{l.name}</span>
           <span className="text-xs text-gray-500 font-mono">{l.phone}</span>
+          {l.channel === 'telegram' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-950 border border-sky-800 text-sky-300">✈ TG</span>}
           {l.needsReply && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new reply</span>}
         </div>
         {lr && <p className="text-xs text-gray-400 bg-gray-800/60 rounded-lg px-2 py-1.5 line-clamp-2">“{lr.text}”</p>}
@@ -99,6 +102,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
         <div className="flex gap-2 flex-wrap">
           {next && <button onClick={() => act(l.id, () => setStatus(l.id, next.to, next.contacts ? { contacted: true } : undefined), `${l.name}: ${next.label}`)} disabled={b}
             className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">{b ? '…' : next.label}</button>}
+          {l.channel === 'telegram' && <button onClick={() => { setSendFor(sendFor === l.id ? null : l.id); setSendText(l.ai?.suggested_reply || ''); }} className="text-xs text-sky-400 hover:text-sky-300 px-2 py-1.5 font-medium">Reply ✈</button>}
           <button onClick={() => { setReplyFor(replyFor === l.id ? null : l.id); setReplyText(''); }} className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1.5">Log reply</button>
           <select value="" onChange={(e) => { if (e.target.value) act(l.id, () => setStatus(l.id, e.target.value as Status), `Moved ${l.name}`); }}
             className="text-[11px] text-gray-500 bg-transparent border-0 focus:outline-none cursor-pointer ml-auto">
@@ -113,6 +117,15 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
               className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-green-600" />
             <button onClick={() => replyText.trim() && act(l.id, () => logReply(l.id, replyText.trim()), 'Reply logged').then(() => setReplyFor(null))}
               className="bg-blue-700 hover:bg-blue-600 text-white text-xs px-2.5 py-1.5 rounded-lg">Save</button>
+          </div>
+        )}
+
+        {sendFor === l.id && (
+          <div className="flex gap-2">
+            <input value={sendText} onChange={(e) => setSendText(e.target.value)} placeholder="Reply via Telegram…" autoFocus
+              className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-green-600" />
+            <button onClick={() => sendText.trim() && act(l.id, () => sendReply(l.id, sendText.trim()), `Sent to ${l.name}`).then(() => setSendFor(null))}
+              className="bg-green-700 hover:bg-green-600 text-white text-xs px-2.5 py-1.5 rounded-lg">Send</button>
           </div>
         )}
       </div>
