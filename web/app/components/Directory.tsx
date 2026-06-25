@@ -18,6 +18,9 @@ const GROUPS: { key: string; label: string }[] = [
 export default function Directory({ leads, numbers, showToast, refresh }: { leads: Lead[]; numbers: WaNumber[]; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
   const [search, setSearch] = useState('');
   const [group, setGroup] = useState('all');
+  const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'name', dir: 1 });
+  const sortBy = (key: string) => setSort((s) => (s.key === key ? { key, dir: (s.dir === 1 ? -1 : 1) as 1 | -1 } : { key, dir: 1 }));
+  const arrow = (key: string) => (sort.key === key ? (sort.dir === 1 ? ' ▲' : ' ▼') : '');
   const [replyFor, setReplyFor] = useState<number | null>(null);
   const [replyText, setReplyText] = useState('');
   const [showAdd, setShowAdd] = useState(false);
@@ -43,6 +46,14 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
     const matchSearch = !q || l.name.toLowerCase().includes(q) || l.phone.includes(search) || (l.email || '').toLowerCase().includes(q);
     return matchGroup && matchSearch;
   });
+
+  const sortVal = (l: Lead): string | number => {
+    if (sort.key === 'phone') return l.phone || '';
+    if (sort.key === 'status') return ALL_STATUSES.indexOf((l.status || 'new') as Status);
+    if (sort.key === 'activity') { const t = lastContactOf(l); return t ? new Date(t).getTime() : 0; }
+    return (l.name || '').toLowerCase();
+  };
+  const sorted = [...visible].sort((a, b) => { const av = sortVal(a), bv = sortVal(b); return (av < bv ? -1 : av > bv ? 1 : 0) * sort.dir; });
 
   const change = async (id: number, status: Status) => {
     const { ok, data } = await setStatus(id, status);
@@ -73,15 +84,15 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-gray-950 border-b border-gray-800">
             <tr>
-              <th className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium">Name</th>
-              <th className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium">Phone</th>
-              <th className="px-4 py-3 text-left text-gray-400 font-medium hidden md:table-cell">Activity</th>
-              <th className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium">Status</th>
+              <th onClick={() => sortBy('name')} className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium cursor-pointer hover:text-gray-200 select-none">Name{arrow('name')}</th>
+              <th onClick={() => sortBy('phone')} className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium cursor-pointer hover:text-gray-200 select-none">Phone{arrow('phone')}</th>
+              <th onClick={() => sortBy('activity')} className="px-4 py-3 text-left text-gray-400 font-medium hidden md:table-cell cursor-pointer hover:text-gray-200 select-none">Activity{arrow('activity')}</th>
+              <th onClick={() => sortBy('status')} className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium cursor-pointer hover:text-gray-200 select-none">Status{arrow('status')}</th>
               <th className="px-4 py-3 text-right text-gray-400 font-medium">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-900">
-            {visible.map((l) => {
+            {sorted.map((l) => {
               const s = (l.status || 'new') as Status;
               const meta = STATUS_META[s];
               const lr = l.replies?.[l.replies.length - 1];
@@ -121,7 +132,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                 </React.Fragment>
               );
             })}
-            {visible.length === 0 && <tr><td colSpan={5} className="px-4 py-16 text-center text-gray-600">No leads match.</td></tr>}
+            {sorted.length === 0 && <tr><td colSpan={5} className="px-4 py-16 text-center text-gray-600">No leads match.</td></tr>}
           </tbody>
         </table>
       </div>
