@@ -60,14 +60,34 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
     if (ok && data.ok) { showToast('Status updated'); refresh(); } else showToast(data.error || 'Failed', false);
   };
 
+  // Live duplicate check against loaded leads (same phone last-8, or same name).
+  const addDup = (() => {
+    const digits = addForm.phone.replace(/\D/g, '');
+    const nameL = addForm.name.trim().toLowerCase();
+    if (digits.length < 8 && !nameL) return null;
+    return leads.find((l) => {
+      const ld = (l.phone || '').replace(/\D/g, '');
+      const phoneMatch = digits.length >= 8 && ld.length >= 8 && ld.slice(-8) === digits.slice(-8);
+      const nameMatch = !!nameL && l.name.trim().toLowerCase() === nameL;
+      return phoneMatch || nameMatch;
+    }) || null;
+  })();
+
+  const doAdd = async (force: boolean) => {
+    const r = await fetch(`${API}/leads`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...addForm, force }) });
+    if (r.status === 409) {
+      const d = await r.json().catch(() => ({}));
+      const e = d.existing || {};
+      if (confirm(`⚠ Possible duplicate (matched by ${d.matchedBy}):\n\n${e.name} — ${e.phone} (${e.status || 'lead'})\n\nAdd this new lead anyway?`)) return doAdd(true);
+      return;
+    }
+    if (r.ok) { showToast(`Added ${addForm.name}`); setAddForm({ name: '', phone: '', email: '', notes: '', adviser: '' }); setShowAdd(false); refresh(); }
+    else showToast('Failed to add', false);
+  };
   const addLead = async () => {
     if (!addForm.name.trim() || !addForm.phone.trim()) return;
     setSaving(true);
-    try {
-      const r = await fetch(`${API}/leads`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(addForm) });
-      if (r.ok) { showToast(`Added ${addForm.name}`); setAddForm({ name: '', phone: '', email: '', notes: '', adviser: '' }); setShowAdd(false); refresh(); }
-      else showToast('Failed to add', false);
-    } catch { showToast('Network error', false); } finally { setSaving(false); }
+    try { await doAdd(false); } catch { showToast('Network error', false); } finally { setSaving(false); }
   };
 
   return (
@@ -149,9 +169,14 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                 </div>
               ))}
             </div>
+            {addDup && (
+              <div className="mt-4 text-xs text-amber-300 bg-amber-950/30 border border-amber-800 rounded-lg px-3 py-2">
+                ⚠ Possible duplicate: <span className="font-medium">{addDup.name}</span> — {addDup.phone || 'no phone'} ({addDup.status || 'lead'}). You can still add it.
+              </div>
+            )}
             <div className="flex gap-3 mt-6">
               <button onClick={() => setShowAdd(false)} className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium py-2.5 rounded-lg">Cancel</button>
-              <button onClick={addLead} disabled={saving || !addForm.name.trim() || !addForm.phone.trim()} className="flex-1 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white text-sm font-semibold py-2.5 rounded-lg">{saving ? 'Saving…' : 'Add'}</button>
+              <button onClick={addLead} disabled={saving || !addForm.name.trim() || !addForm.phone.trim()} className={`flex-1 disabled:opacity-50 text-white text-sm font-semibold py-2.5 rounded-lg ${addDup ? 'bg-amber-600 hover:bg-amber-500' : 'bg-green-600 hover:bg-green-500'}`}>{saving ? 'Saving…' : addDup ? 'Add anyway' : 'Add'}</button>
             </div>
           </div>
         </div>

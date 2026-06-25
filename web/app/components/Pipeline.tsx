@@ -41,6 +41,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
   const [replyText, setReplyText] = useState('');
   const [sendFor, setSendFor] = useState<number | null>(null);
   const [sendText, setSendText] = useState('');
+  const [sort, setSort] = useState('contacted');
 
   const loadConfig = useCallback(async () => { try { setConfig(await (await fetch(`${API}/config`)).json()); } catch {} }, []);
   useEffect(() => { loadConfig(); }, [loadConfig]);
@@ -55,6 +56,16 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
   const byStatus: Record<string, Lead[]> = {};
   PIPELINE_ORDER.forEach((s) => (byStatus[s] = []));
   leads.forEach((l) => { if (l.status && byStatus[l.status]) byStatus[l.status].push(l); });
+
+  const ts = (s: string | null) => (s ? new Date(s).getTime() : 0);
+  const sortLeads = (list: Lead[]) => {
+    const a = [...list];
+    if (sort === 'name') a.sort((x, y) => x.name.localeCompare(y.name));
+    else if (sort === 'reply') a.sort((x, y) => ts(lastReplyOf(y)) - ts(lastReplyOf(x)));
+    else if (sort === 'needs') a.sort((x, y) => (Number(!!y.needsReply) - Number(!!x.needsReply)) || (ts(lastReplyOf(y)) - ts(lastReplyOf(x))));
+    else a.sort((x, y) => ts(lastContactOf(x)) - ts(lastContactOf(y))); // coldest / never-contacted first
+    return a;
+  };
 
   const sessionCount = (id: string) => leads.filter((l) => l.wf?.session === id && PIPELINE_ORDER.indexOf(l.status as Status) >= PIPELINE_ORDER.indexOf('scheduled')).length;
   const sessionLabelOf = (id?: string | null) => { const s = config?.sessions.find((x) => x.id === id); return s ? sessionDisplay(s) : id || '—'; };
@@ -148,6 +159,12 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
       <div className="px-4 sm:px-6 py-3 border-b border-gray-800 flex flex-wrap items-center gap-3">
         <h2 className="text-base sm:text-lg font-semibold text-gray-100">Recruitment Pipeline</h2>
         <span className="text-xs text-gray-500">{PIPELINE_ORDER.reduce((n, s) => n + byStatus[s].length, 0)} in pipeline</span>
+        <select value={sort} onChange={(e) => setSort(e.target.value)} className="ml-auto text-xs bg-gray-900 border border-gray-700 rounded-lg px-2 py-1.5 text-gray-300 focus:outline-none focus:border-green-600">
+          <option value="contacted">Sort: Coldest contact first</option>
+          <option value="reply">Sort: Newest reply first</option>
+          <option value="needs">Sort: Needs reply first</option>
+          <option value="name">Sort: Name A–Z</option>
+        </select>
       </div>
       <div className="px-4 sm:px-6 border-b border-gray-800 flex gap-1 overflow-x-auto">
         {TABS.map((t) => {
@@ -166,7 +183,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
         {byStatus[active].length === 0 ? (
           <div className="text-sm text-gray-700 text-center py-16 border border-dashed border-gray-800 rounded-xl">No leads in {STATUS_META[active].label}.</div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">{byStatus[active].map(card)}</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">{sortLeads(byStatus[active]).map(card)}</div>
         )}
       </div>
     </div>

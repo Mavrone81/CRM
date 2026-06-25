@@ -756,9 +756,27 @@ app.get('/api/leads', (_req, res) => {
 
 // Add new lead
 app.post('/api/leads', (req, res) => {
-  const { name, phone, email, notes, adviser } = req.body;
+  const { name, phone, email, notes, adviser, force } = req.body;
   if (!name || !phone) return res.status(400).json({ error: 'name and phone required' });
   const leads = readLeads();
+
+  // Duplicate detection — same phone (last-8 digits) or same name (case-insensitive).
+  if (!force) {
+    const digits = (phone || '').replace(/\D/g, '');
+    const dups = leads.filter((l) => {
+      const ld = (l.phone || '').replace(/\D/g, '');
+      const phoneMatch = digits.length >= 8 && ld.length >= 8 && ld.slice(-8) === digits.slice(-8);
+      const nameMatch = !!name && !!l.name && l.name.trim().toLowerCase() === name.trim().toLowerCase();
+      return phoneMatch || nameMatch;
+    });
+    if (dups.length) {
+      const d = dups[0];
+      const ld = (d.phone || '').replace(/\D/g, '');
+      const by = digits.length >= 8 && ld.length >= 8 && ld.slice(-8) === digits.slice(-8) ? 'phone' : 'name';
+      return res.status(409).json({ duplicate: true, matchedBy: by, count: dups.length, existing: { id: d.id, name: d.name, phone: d.phone, status: d.status } });
+    }
+  }
+
   const id = leads.length ? Math.max(...leads.map((l) => l.id)) + 1 : 1;
   const lead = { id, name, phone, email: email || '', notes: notes || '', adviser: adviser || '', created: new Date().toISOString(), sent: false, sentAt: null, replies: [], status: 'new' };
   leads.unshift(lead);
@@ -905,6 +923,25 @@ app.delete('/api/numbers/:id', async (req, res) => {
   conns.delete(id);
   writeConfig({ ...readConfig(), numbers: numbersCfg().filter((n) => n.id !== id) });
   res.json({ ok: true });
+});
+
+// Evenly + randomly distribute the leads that still need contacting across the
+// available numbers (connected ones, else all configured). Almost-equal counts.
+app.post('/api/numbers/distribute', (req, res) => {
+  const cfgNums = numbersCfg();
+  let nums = cfgNums.filter((n) => conns.get(n.id)?.state === 'open');
+  if (!nums.length) nums = cfgNums;
+  if (!nums.length) return res.status(400).json({ error: 'no numbers configured' });
+
+  const CLOSED = ['declined', 'opted_out', 'onboarded'];
+  const leads = readLeads();
+  const eligible = leads.filter((l) => l.channel !== 'telegram' && !CLOSED.includes(l.status || 'new'));
+  for (let i = eligible.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [eligible[i], eligible[j]] = [eligible[j], eligible[i]]; } // shuffle
+  const counts = {};
+  eligible.forEach((l, i) => { const id = nums[i % nums.length].id; l.assignedNumber = id; counts[id] = (counts[id] || 0) + 1; });
+  saveLeads(leads);
+  console.log(`[distribute] ${eligible.length} leads across ${nums.length} number(s)`);
+  res.json({ ok: true, total: eligible.length, numbers: nums.map((n) => ({ id: n.id, label: n.label, count: counts[n.id] || 0 })) });
 });
 
 // ── Pipeline config (sessions + brief template) ─────────────────────────────────

@@ -23,6 +23,16 @@ export default function Numbers({ numbers, onClose, showToast, refresh }: { numb
   };
   const relink = async (id: string) => { await fetch(`${API}/numbers/${id}/relink`, { method: 'POST' }); showToast('Generating QR…'); refresh(); };
   const remove = async (id: string) => { if (!confirm('Remove this number? Its session is cleared.')) return; await fetch(`${API}/numbers/${id}`, { method: 'DELETE' }); showToast('Removed'); refresh(); };
+  const distribute = async () => {
+    if (!confirm('Evenly assign every lead that still needs contacting across the connected numbers? This sets each lead’s WhatsApp number.')) return;
+    setBusy(true);
+    try {
+      const r = await fetch(`${API}/numbers/distribute`, { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { showToast(`Distributed ${d.total} leads — ${(d.numbers || []).map((n: { label: string; count: number }) => `${n.label}: ${n.count}`).join(', ')}`); refresh(); }
+      else showToast(d.error || 'Failed', false);
+    } catch { showToast('Network error', false); } finally { setBusy(false); }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onClose}>
@@ -48,7 +58,8 @@ export default function Numbers({ numbers, onClose, showToast, refresh }: { numb
             </div>
           ))}
           <button onClick={add} disabled={busy} className="text-sm text-gray-300 hover:text-white border border-dashed border-gray-700 rounded-lg py-2 disabled:opacity-50">+ Add a number</button>
-          <p className="text-[11px] text-gray-600">Each lead sticks to the number it talks to. To link: scan a number's QR with WhatsApp → Linked devices → Link a device.</p>
+          <button onClick={distribute} disabled={busy} className="text-sm bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white font-medium rounded-lg py-2.5">Distribute leads evenly across numbers</button>
+          <p className="text-[11px] text-gray-600">Distribute splits every lead still needing contact (outreach, inbox, pipeline) almost-equally and at random across the connected numbers. Each lead then sticks to its number.</p>
         </div>
       </div>
     </div>
