@@ -140,6 +140,29 @@ function saveDocs(docs) { writeFileSync(DOCS_META_PATH, JSON.stringify(docs, nul
 const anthropic = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 const AI_MODEL = 'claude-haiku-4-5';
 
+// Random style nudges so AI-drafted replies vary per lead (anti-repetition).
+const STYLE_HINTS = [
+  'open casually, like you are continuing a chat',
+  'lead with a little genuine warmth in your own words',
+  'keep it brief and easy-going',
+  'sound personable and a touch curious about them',
+  'be relaxed and friendly, low-pressure',
+  'acknowledge what they said first, then steer gently',
+];
+
+// Spintax: {a|b|c} picks one variant at random -> every outbound message differs.
+function spin(text) {
+  if (!text) return text;
+  let out = text, guard = 0;
+  while (out.includes('{') && guard++ < 50) {
+    out = out.replace(/\{([^{}]*)\}/, (_, group) => {
+      const opts = group.split('|');
+      return opts[Math.floor(Math.random() * opts.length)];
+    });
+  }
+  return out;
+}
+
 const CLASSIFY_SCHEMA = {
   type: 'object',
   properties: {
@@ -184,22 +207,29 @@ async function classifyReplies(name, replies) {
 
   const system = `You are the WhatsApp assistant for a Pet Afterlife SG recruitment outreach. We message contacts asking if they're open to a flexible-income opportunity and to reply "Interested".
 
-Your job: classify each contact's reply, and draft a SHORT, warm, factual reply we can send back — grounded ONLY in the knowledge base below. Never invent prices, commission rates, dates, or commitments. If they're interested or asking to learn more, invite them to a briefing session (Thursday 7:30pm or Sunday 2pm) and ask which suits them. Keep replies concise and natural for WhatsApp (1-4 sentences). This is emotionally sensitive work — be calm and never pushy.
+Your job: classify each contact's reply, and draft a SHORT reply we can send back — grounded ONLY in the knowledge base below. Never invent prices, commission rates, dates, or commitments. If they're interested or asking to learn more, invite them to a briefing session (Thursday 7:30pm or Sunday 2pm) and ask which suits them.
+
+VOICE — write the reply like a REAL person texting, never a template:
+- Vary your wording EVERY time. Never reuse stock openers ("Great!", "Awesome!") or the same sentence structures. Two replies to two different people must never read alike.
+- Sound natural, warm and human — like a friendly colleague texting, not a corporate script. Light and conversational.
+- Keep it short for WhatsApp (1-3 sentences). Match their energy. Never pushy.
 
 === KNOWLEDGE BASE ===
 ${KNOWLEDGE}
 === END KNOWLEDGE BASE ===`;
 
+  const hint = STYLE_HINTS[Math.floor(Math.random() * STYLE_HINTS.length)];
   const prompt = `Contact name: ${name}
 Their reply/replies:
 ${transcript}
 
-Classify their response and draft the reply to send back.`;
+Classify their response and draft the reply to send back. For the reply: ${hint}. Make it feel individually written — fresh phrasing, no reused lines (variation seed: ${Math.random().toString(36).slice(2, 8)}).`;
 
   try {
     const res = await anthropic.messages.create({
       model: AI_MODEL,
       max_tokens: 1024,
+      temperature: 1, // high variety so replies don't repeat across leads
       // Cache the system+knowledge prefix so it isn't re-billed every message
       system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
       output_config: { format: { type: 'json_schema', schema: CLASSIFY_SCHEMA } },
@@ -381,8 +411,15 @@ function toJid(phone) {
   return `${normalised}@s.whatsapp.net`;
 }
 
+// Spintax outreach — every send renders a slightly different wording (anti-ban).
+const OUTREACH_SPINTAX = `{Hi|Hey|Hello|Hi there} [Name], {we connected previously|we were in touch a while back|we'd spoken before|we connected some time ago} regarding a {business/career opportunity|career opportunity|business opportunity|flexible income opportunity}, but I {recently switched to WhatsApp Business|moved over to WhatsApp Business recently|just switched to WhatsApp Business} and lost my chat history.
+
+I'm {updating my records|tidying up my contacts|going through my list} and wanted to {check if|see if|ask if} you're still open to {hearing about opportunities or additional income streams|exploring opportunities or some extra income|hearing about a side-income option}.
+
+{If yes, just reply|If you are, just drop me an|Keen? Just reply} "Interested" and I'll {send you the details|share the details|fill you in}. {If not, no worries and I won't follow up further.|No worries at all if not — I won't keep messaging.|If it's not for you, all good, I won't follow up.}`;
+
 function buildMessage(name) {
-  return `Hi ${name}, We connected previously regarding a business/career opportunity, but I recently switched to WhatsApp Business and lost my chat history.\n\nI'm updating my records and wanted to check if you're still open to hearing about opportunities or additional income streams.\n\nIf yes, just reply "Interested" and I'll send you the details. If not, no worries and I won't follow up further.`;
+  return spin(OUTREACH_SPINTAX).replace(/\[Name\]/g, name);
 }
 
 // Extract the sender's real phone from a message's various JID fields (handles
