@@ -734,7 +734,7 @@ async function connectNumber(numId) {
     const cc = conns.get(numId);
     if (!cc) return;
     if (qr) { cc.qr = await qrcode.toDataURL(qr); cc.state = 'connecting'; console.log(`[WA:${label}] QR generated`); }
-    if (connection === 'open') { cc.state = 'open'; cc.qr = null; cc.reconnects = 0; console.log(`[WA:${label}] Connected`); }
+    if (connection === 'open') { cc.state = 'open'; cc.qr = null; cc.reconnects = 0; cc.phone = (sock.user?.id || '').split(/[:@]/)[0] || null; console.log(`[WA:${label}] Connected${cc.phone ? ' as ' + cc.phone : ''}`); }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
       cc.state = 'close'; cc.qr = null;
@@ -761,7 +761,7 @@ app.use(express.json({ limit: '15mb' })); // base64 document uploads
 // Status + QR
 app.get('/api/status', (_req, res) => {
   const leadsForCount = readLeads();
-  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
+  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, phone: c.phone || null, sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
   const state = anyOpen() ? 'open' : (numbers.some((n) => n.state === 'connecting') ? 'connecting' : 'close');
   const qr = (numbers.find((n) => n.state === 'connecting' && n.qr) || {}).qr || null;
   res.json({ state, qr, numbers, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername }, outreach: { running: outreach.running, queued: outreach.queue.length, sent: outreach.sent, failed: outreach.failed, windowOpen: inSendWindow() } });
@@ -1009,7 +1009,7 @@ app.post('/api/logout', async (_req, res) => {
 });
 
 // ── Numbers management (multi-number) ───────────────────────────────────────────
-const numberView = (n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null }; };
+const numberView = (n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, phone: c.phone || null }; };
 app.get('/api/numbers', (_req, res) => res.json(numbersCfg().map(numberView)));
 
 app.post('/api/numbers', (req, res) => {

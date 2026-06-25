@@ -63,6 +63,7 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
             <div key={n.id} className="border border-gray-800 rounded-xl p-3 flex flex-col gap-2">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium text-gray-200">{n.label}</span>
+                {n.phone && <span className="text-xs text-gray-400 font-mono">+{n.phone}</span>}
                 <span className={`text-xs px-2 py-0.5 rounded-full border ${STATE_CHIP[n.state] || STATE_CHIP.close}`}>{STATE_LABEL[n.state] || n.state}</span>
                 <div className="ml-auto flex gap-2">
                   <button onClick={() => relink(n.id)} className="text-xs text-gray-400 hover:text-gray-200">Relink</button>
