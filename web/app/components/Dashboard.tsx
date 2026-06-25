@@ -80,7 +80,7 @@ export default function Dashboard() {
       <div className="flex flex-col flex-1 md:overflow-hidden">
         {view === 'inbox' && <Inbox leads={leads} showToast={showToast} refresh={fetchLeads} />}
         {view === 'pipeline' && <Pipeline leads={leads} status={status} showToast={showToast} refresh={fetchLeads} />}
-        {view === 'directory' && <Directory leads={leads} showToast={showToast} refresh={fetchLeads} />}
+        {view === 'directory' && <Directory leads={leads} numbers={status.numbers || []} showToast={showToast} refresh={fetchLeads} />}
         {view === 'analytics' && <Analytics leads={leads} />}
       </div>
 

@@ -69,6 +69,7 @@ export type Lead = {
   lastContactedAt?: string;           // last time WE messaged them (manual or bot)
   channel?: 'telegram' | 'whatsapp';  // which channel this lead is on
   telegramChatId?: number | string;
+  assignedNumber?: string;            // sticky WhatsApp number id
 };
 
 // "3d ago" style relative time.
