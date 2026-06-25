@@ -344,6 +344,7 @@ async function parseOnboardingChoice(text, sessions) {
 let sock = null;
 let connectionState = 'close'; // 'close' | 'connecting' | 'open'
 let currentQR = null;           // base64 QR image
+let waReconnects = 0;           // consecutive reconnect failures — halt when blocked/banned
 
 // Outgoing/seen message store so we can answer decryption-retry requests. Without
 // this, recipients who can't decrypt a message (common after a reconnect) stay
@@ -599,6 +600,7 @@ async function connectWA() {
     if (connection === 'open') {
       connectionState = 'open';
       currentQR = null;
+      waReconnects = 0; // healthy connection — reset the failure counter
       console.log('[WA] Connected');
     }
 
@@ -609,17 +611,25 @@ async function connectWA() {
       console.log('[WA] Disconnected, code:', code);
 
       if (code === DisconnectReason.loggedOut) {
-        // Account logged out or banned — clear session so a new account can be linked
-        console.log('[WA] Session ended (logged out / restricted) — clearing session for fresh QR');
+        console.log('[WA] Session ended (logged out) — clearing session for fresh QR');
         try {
           const files = readdirSync(join(__dirname, 'sessions'));
           for (const f of files) rmSync(join(__dirname, 'sessions', f), { recursive: true, force: true });
         } catch {}
       }
 
-      // Always reconnect — will generate a fresh QR if session was cleared
-      console.log('[WA] Reconnecting in 3s…');
-      setTimeout(connectWA, 3000);
+      // STOP hammering a blocked/banned endpoint. 403 = WhatsApp has blocked this
+      // number/device; also halt after repeated failures. Re-link to retry.
+      if (code === 403 || code === DisconnectReason.forbidden) {
+        console.log('[WA] 403 Forbidden — number/device is BLOCKED by WhatsApp. Halting reconnects (re-link from the dashboard to retry).');
+        return;
+      }
+      if (++waReconnects > 8) {
+        console.log(`[WA] reconnect failed ${waReconnects}x — halting (re-link to retry).`);
+        return;
+      }
+      console.log(`[WA] Reconnecting in 5s… (attempt ${waReconnects})`);
+      setTimeout(connectWA, 5000);
     }
   });
 }
@@ -827,6 +837,8 @@ app.post('/api/logout', async (_req, res) => {
   sock = null;
   connectionState = 'close';
   currentQR = null;
+  waReconnects = 0;
+  setTimeout(connectWA, 1000); // restart the connection attempt (re-link after a halt)
   res.json({ ok: true });
 });
 
