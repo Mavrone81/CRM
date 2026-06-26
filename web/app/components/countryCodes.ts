@@ -182,13 +182,30 @@ const CODE_SET = new Set(COUNTRY_CODES.map((c) => c.code));
 
 // Display a stored number as "+65 9195 5242" (country code split out, local
 // number grouped in 4s). Falls back gracefully if no code is detected.
-export function fmtPhone(raw?: string | null): string {
+// Decode an ISO 2-letter code (e.g. "SG") from a flag emoji's regional indicators.
+function flagToIso(flag: string): string {
+  const cps = [...flag].map((c) => c.codePointAt(0) || 0);
+  if (cps.length === 2 && cps[0] >= 0x1f1e6 && cps[0] <= 0x1f1ff) {
+    return String.fromCharCode(cps[0] - 0x1f1e6 + 65) + String.fromCharCode(cps[1] - 0x1f1e6 + 65);
+  }
+  return '';
+}
+
+// Split a stored number into its country (code + flag + ISO) and spaced local part.
+export function phoneParts(raw?: string | null): { cc: string; iso: string; flag: string; local: string } {
   const d = (raw || '').replace(/\D/g, '');
-  if (!d) return '—';
-  // Bare 8-digit local number = Singapore (stored before a country code was added).
-  if (d.length === 8) return `+65 ${d.slice(0, 4)} ${d.slice(4)}`;
+  if (!d) return { cc: '', iso: '', flag: '', local: '' };
   let cc = '';
-  for (const len of [3, 2, 1]) { if (d.length > len && CODE_SET.has(d.slice(0, len))) { cc = d.slice(0, len); break; } }
+  if (d.length === 8) cc = '65'; // bare 8-digit local = Singapore
+  else for (const len of [3, 2, 1]) { if (d.length > len && CODE_SET.has(d.slice(0, len))) { cc = d.slice(0, len); break; } }
   const local = (cc ? d.slice(cc.length) : d).replace(/(\d{4})(?=\d)/g, '$1 ');
-  return cc ? `+${cc} ${local}` : local;
+  const match = cc ? COUNTRY_CODES.find((c) => c.code === cc) : null;
+  const flag = match ? match.flag : '';
+  return { cc, iso: flag ? flagToIso(flag) : '', flag, local: local || d };
+}
+
+export function fmtPhone(raw?: string | null): string {
+  const p = phoneParts(raw);
+  if (!p.local) return '—';
+  return p.cc ? `+${p.cc} ${p.local}` : p.local;
 }

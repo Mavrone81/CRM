@@ -6,7 +6,7 @@ import type { Status } from './status';
 import { ALL_STATUSES, STATUS_META } from './status';
 import { relTime, lastContactOf, lastReplyOf } from './types';
 import { API, logReply, setStatus, updateLead } from './leadApi';
-import { COUNTRY_CODES, fmtPhone } from './countryCodes';
+import { COUNTRY_CODES, phoneParts } from './countryCodes';
 
 const GROUPS: { key: string; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -212,6 +212,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
             <tr>
               <th className="pl-3 sm:pl-4 py-3 w-8"><input type="checkbox" checked={sorted.length > 0 && sorted.every((l) => selected.has(l.id))} onChange={(e) => setSelected((p) => { const n = new Set(p); if (e.target.checked) sorted.forEach((l) => n.add(l.id)); else sorted.forEach((l) => n.delete(l.id)); return n; })} className="align-middle cursor-pointer" /></th>
               <th onClick={() => sortBy('name')} className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium cursor-pointer hover:text-gray-200 select-none">Name{arrow('name')}</th>
+              <th className="px-2 py-3 text-left text-gray-400 font-medium">Country</th>
               <th onClick={() => sortBy('phone')} className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium cursor-pointer hover:text-gray-200 select-none">Phone{arrow('phone')}</th>
               <th onClick={() => sortBy('activity')} className="px-4 py-3 text-left text-gray-400 font-medium hidden md:table-cell cursor-pointer hover:text-gray-200 select-none">Activity{arrow('activity')}</th>
               <th onClick={() => sortBy('status')} className="px-3 sm:px-4 py-3 text-left text-gray-400 font-medium cursor-pointer hover:text-gray-200 select-none">Status{arrow('status')}</th>
@@ -223,6 +224,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
               const s = (l.status || 'new') as Status;
               const meta = STATUS_META[s];
               const lr = l.replies?.[l.replies.length - 1];
+              const ph = phoneParts(l.phone);
               return (
                 <React.Fragment key={l.id}>
                   <tr className={`hover:bg-gray-900/50 ${selected.has(l.id) ? 'bg-gray-900/40' : ''}`}>
@@ -231,8 +233,11 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                       <div className="font-medium text-gray-100 flex items-center gap-1.5">{l.name}{l.needsReply && <span className="text-[10px] px-1.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new</span>}</div>
                       <div className="text-xs text-gray-500 truncate max-w-[160px] sm:max-w-none">{l.email}</div>
                     </td>
+                    <td className="px-2 py-3 text-xs whitespace-nowrap">
+                      {ph.flag ? <span className="inline-flex items-center gap-1"><span>{ph.flag}</span><span className="text-gray-400">{ph.iso || `+${ph.cc}`}</span></span> : <span className="text-gray-600">—</span>}
+                    </td>
                     <td className="px-3 sm:px-4 py-3 text-xs whitespace-nowrap">
-                      <div className="text-gray-300 font-mono">{fmtPhone(l.phone)}</div>
+                      <div className="text-gray-300 font-mono">{ph.local || '—'}</div>
                       <div className="text-[10px] text-gray-500">{l.channel === 'telegram' ? '✈ Telegram' : `📱 ${numLabel(l.assignedNumber)}`}</div>
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell text-xs max-w-[240px]">
@@ -250,7 +255,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                     </td>
                   </tr>
                   {replyFor === l.id && (
-                    <tr className="bg-gray-900/40"><td colSpan={6} className="px-4 py-2">
+                    <tr className="bg-gray-900/40"><td colSpan={7} className="px-4 py-2">
                       <div className="flex gap-2">
                         <input value={replyText} onChange={(e) => setReplyText(e.target.value)} placeholder={`What ${l.name} said…`} autoFocus className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
                         <button onClick={async () => { if (!replyText.trim()) return; const { ok } = await logReply(l.id, replyText.trim()); if (ok) { showToast('Reply logged + classified'); setReplyFor(null); refresh(); } }} className="bg-blue-700 hover:bg-blue-600 text-white text-sm px-3 py-2 rounded-lg">Save</button>
@@ -260,7 +265,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                 </React.Fragment>
               );
             })}
-            {sorted.length === 0 && <tr><td colSpan={6} className="px-4 py-16 text-center text-gray-600">No leads match.</td></tr>}
+            {sorted.length === 0 && <tr><td colSpan={7} className="px-4 py-16 text-center text-gray-600">No leads match.</td></tr>}
           </tbody>
         </table>
       </div>
