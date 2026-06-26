@@ -6,19 +6,13 @@ import type { Status } from './status';
 import { ALL_STATUSES, STATUS_META } from './status';
 import { relTime, lastContactOf, lastReplyOf } from './types';
 import { API, logReply, setStatus, updateLead } from './leadApi';
+import { COUNTRY_CODES } from './countryCodes';
 
 const GROUPS: { key: string; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'outreach', label: 'Outreach' },
   { key: 'pipeline', label: 'Pipeline' },
   { key: 'closed', label: 'Closed' },
-];
-
-const COUNTRY_CODES = [
-  { code: '65', label: '🇸🇬 +65' }, { code: '60', label: '🇲🇾 +60' }, { code: '62', label: '🇮🇩 +62' },
-  { code: '63', label: '🇵🇭 +63' }, { code: '66', label: '🇹🇭 +66' }, { code: '84', label: '🇻🇳 +84' },
-  { code: '91', label: '🇮🇳 +91' }, { code: '86', label: '🇨🇳 +86' }, { code: '852', label: '🇭🇰 +852' },
-  { code: '1', label: '🇺🇸 +1' }, { code: '44', label: '🇬🇧 +44' }, { code: '61', label: '🇦🇺 +61' },
 ];
 
 type ImportRow = { name: string; phone: string; email: string; notes: string; adviser: string };
@@ -281,7 +275,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                   <label className="text-xs font-medium text-gray-400">{label}</label>
                   {key === 'phone' ? (
                     <div className="flex gap-2">
-                      <select value={addForm.cc} onChange={(e) => setAddForm((p) => ({ ...p, cc: e.target.value }))} className="min-h-[44px] bg-gray-800 border border-gray-700 rounded-lg px-2 text-sm text-gray-200 focus:outline-none focus:border-green-600">{COUNTRY_CODES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}</select>
+                      <select value={addForm.cc} onChange={(e) => setAddForm((p) => ({ ...p, cc: e.target.value }))} className="w-28 shrink-0 min-h-[44px] bg-gray-800 border border-gray-700 rounded-lg px-2 text-sm text-gray-200 focus:outline-none focus:border-green-600">{COUNTRY_CODES.map((c) => <option key={c.code + c.name} value={c.code}>+{c.code} {c.flag} {c.name}</option>)}</select>
                       <input value={addForm.phone} onChange={(e) => setAddForm((p) => ({ ...p, phone: e.target.value }))} placeholder="9123 4567" className="flex-1 min-w-0 min-h-[44px] bg-gray-800 border border-gray-700 rounded-lg px-3 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
                     </div>
                   ) : (
@@ -313,7 +307,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                   <label className="text-xs font-medium text-gray-400">{label}{key === 'phone' ? ' (include country code, or pick one)' : ''}</label>
                   {key === 'phone' ? (
                     <div className="flex gap-2">
-                      <select value={editForm.cc} onChange={(e) => setEditForm((p) => ({ ...p, cc: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600">{COUNTRY_CODES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}</select>
+                      <select value={editForm.cc} onChange={(e) => setEditForm((p) => ({ ...p, cc: e.target.value }))} className="w-28 shrink-0 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600">{COUNTRY_CODES.map((c) => <option key={c.code + c.name} value={c.code}>+{c.code} {c.flag} {c.name}</option>)}</select>
                       <input value={editForm.phone} onChange={(e) => setEditForm((p) => ({ ...p, phone: e.target.value }))} className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
                     </div>
                   ) : (
