@@ -451,7 +451,11 @@ async function probeNumber(numId) {
 async function recoveryProbe() {
   for (const [numId, c] of conns) {
     const cfg = numbersCfg().find((n) => n.id === numId);
-    if (c.state === 'open' && ((cfg && cfg.paused) || c.health === 'undelivered')) await probeNumber(numId);
+    if (!((cfg && cfg.paused) || c.health === 'undelivered')) continue;
+    // Bring a halted/offline number up just long enough to test it.
+    if (c.state !== 'open') { c.reconnects = 0; connectNumber(numId).catch(() => {}); await new Promise((r) => setTimeout(r, 20000)); }
+    if (conns.get(numId)?.state === 'open') await probeNumber(numId);
+    else console.log(`[probe] ${c.label}: offline — couldn't connect to test this round`);
   }
 }
 setInterval(recoveryProbe, 6 * 60 * 60 * 1000); // every 6 hours
@@ -820,8 +824,17 @@ async function connectNumber(numId) {
     const cc = conns.get(numId);
     if (!cc) return;
     if (qr) { cc.qr = await qrcode.toDataURL(qr); cc.state = 'connecting'; console.log(`[WA:${label}] QR generated`); }
-    if (connection === 'open') { cc.state = 'open'; cc.qr = null; cc.reconnects = 0; cc.phone = (sock.user?.id || '').split(/[:@]/)[0] || null; console.log(`[WA:${label}] Connected${cc.phone ? ' as ' + cc.phone : ''}`); }
+    if (connection === 'open') {
+      cc.state = 'open'; cc.qr = null;
+      cc.phone = (sock.user?.id || '').split(/[:@]/)[0] || null;
+      // Only reset the retry counter once the connection has held for 60s — a number
+      // that flaps (open → immediate drop) keeps its counter so it backs off + halts.
+      clearTimeout(cc.stableTimer);
+      cc.stableTimer = setTimeout(() => { cc.reconnects = 0; }, 60000);
+      console.log(`[WA:${label}] Connected${cc.phone ? ' as ' + cc.phone : ''}`);
+    }
     if (connection === 'close') {
+      clearTimeout(cc.stableTimer);
       const code = lastDisconnect?.error?.output?.statusCode;
       cc.state = 'close'; cc.qr = null;
       console.log(`[WA:${label}] Disconnected, code: ${code}`);
@@ -829,9 +842,10 @@ async function connectNumber(numId) {
         try { for (const f of readdirSync(dir)) rmSync(join(dir, f), { recursive: true, force: true }); } catch {}
       }
       if (code === 403 || code === DisconnectReason.forbidden) { cc.state = 'banned'; console.log(`[WA:${label}] 403 BLOCKED by WhatsApp — halting (relink to retry).`); return; }
-      if (++cc.reconnects > 8) { console.log(`[WA:${label}] reconnect failed ${cc.reconnects}x — halting.`); return; }
-      console.log(`[WA:${label}] Reconnecting in 5s… (attempt ${cc.reconnects})`);
-      setTimeout(() => connectNumber(numId), 5000);
+      if (++cc.reconnects > 8) { console.log(`[WA:${label}] unstable — halting after ${cc.reconnects} flaps (re-link or the 6h probe will retry).`); return; }
+      const delay = Math.min(120000, 5000 * cc.reconnects); // back off: 5s,10s,15s… up to 2m
+      console.log(`[WA:${label}] Reconnecting in ${delay / 1000}s… (attempt ${cc.reconnects})`);
+      setTimeout(() => connectNumber(numId), delay);
     }
   });
 }
