@@ -454,12 +454,15 @@ async function outreachTick() {
     const sock = conns.get(numId)?.sock;
     const text = buildMessage(lead.name); // spintax opening — varied every send
     await sock.sendMessage(toJid(lead.phone), { text });
-    lead.sentReplies = lead.sentReplies || [];
-    lead.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'whatsapp' });
-    lead.lastContactedAt = new Date().toISOString();
-    lead.sent = true; lead.sentAt = lead.sentAt || new Date().toISOString();
-    if (lead.status === 'new') lead.status = 'contacted';
-    saveLeads(leads);
+    mutateLeads((ls) => {
+      const l = ls.find((x) => x.id === lead.id); if (!l) return;
+      l.assignedNumber = numId;
+      l.sentReplies = l.sentReplies || [];
+      l.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'whatsapp' });
+      l.lastContactedAt = new Date().toISOString();
+      l.sent = true; l.sentAt = l.sentAt || new Date().toISOString();
+      if (l.status === 'new') l.status = 'contacted';
+    });
     outreach.sent++;
     console.log(`[outreach] -> ${lead.name} via ${numId} (${outreach.sent} sent · ${outreach.queue.length} left)`);
   } catch (e) {
@@ -487,6 +490,15 @@ function readLeads() {
 
 function saveLeads(leads) {
   writeFileSync(LEADS_PATH, JSON.stringify(leads, null, 2));
+}
+
+// Atomic read-modify-write: read the freshest leads, apply a SYNC mutation, save —
+// with no `await` in between, so concurrent handlers can't clobber each other's
+// writes. Always do slow work (AI calls, media downloads) BEFORE calling this.
+function mutateLeads(fn) {
+  const leads = readLeads();
+  fn(leads);
+  saveLeads(leads);
 }
 
 function normalisePhone(raw) {
@@ -684,60 +696,48 @@ async function connectNumber(numId) {
       const st = target.status || deriveStatus(target);
       const cfg = readConfig();
 
-      // Opt-out: they asked us to stop — flag and never message again.
-      if (isOptOut(text)) { target.status = 'opted_out'; target.needsReply = false; saveLeads(fresh); console.log(`[optout] ${target.name} opted out`); continue; }
+      // Opt-out: they asked us to stop — flag and never message again. (Reply was
+      // already captured atomically above; just apply the status change.)
+      if (isOptOut(text)) { mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.status = 'opted_out'; t.needsReply = false; } }); console.log(`[optout] ${target.name} opted out`); continue; }
 
       // MANUAL-SEND MODE: classify + advance status (read-only) only. Never auto-send.
+      // Slow AI runs OUTSIDE the write; the result is applied via mutateLeads (which
+      // re-reads fresh) so concurrent replies are never clobbered.
       if (['new', 'contacted', 'question', 'review'].includes(st)) {
-        // Pre-pipeline triage — classify interest and route to a status.
         const ai = await classifyReplies(target.name, target.replies);
-        target.ai = { ...ai, classifiedAt: now() };
-        target.status = statusFromCategory(ai.category);
-        saveLeads(fresh);
+        mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.ai = { ...ai, classifiedAt: now() }; t.status = statusFromCategory(ai.category); } });
         console.log(`[ai] ${target.name}: ${ai.category} -> ${target.status}`);
       } else if (st === 'invited') {
-        // Awaiting attendance confirmation — auto-advance status (no message sent).
         const att = await classifyAttendance(target.name, target.replies);
-        target.wf = { ...(target.wf || {}), confirmation: { ...att, detectedAt: now() } };
-        if (att.status === 'confirmed' && att.confidence !== 'low') target.status = 'confirmed';
-        else if (att.status === 'declined') target.status = 'declined';
-        saveLeads(fresh);
-        console.log(`[attend] ${target.name}: ${att.status} (${att.confidence}) -> ${target.status}`);
+        mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (!t) return; t.wf = { ...(t.wf || {}), confirmation: { ...att, detectedAt: now() } }; if (att.status === 'confirmed' && att.confidence !== 'low') t.status = 'confirmed'; else if (att.status === 'declined') t.status = 'declined'; });
+        console.log(`[attend] ${target.name}: ${att.status} (${att.confidence})`);
       } else if (st === 'agreement') {
-        // Awaiting the signed agreement back — a returned PDF triggers validation.
         const isPdf = docMsg && (docMsg.mimetype || '').toLowerCase().includes('pdf');
-        saveLeads(fresh);
         if (isPdf) {
           try {
             const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage });
             const fname = `${target.id}-${Date.now()}.pdf`;
             writeFileSync(join(SIGNED_DIR, fname), buffer);
             const result = await validateSignedAgreement(target.name, buffer.toString('base64'), cfg.requiredFields);
-            const f2 = readLeads();
-            const t2 = f2.find((l) => l.id === target.id);
-            if (t2) {
+            mutateLeads((ls) => {
+              const t2 = ls.find((l) => l.id === target.id);
+              if (!t2) return;
               t2.wf = t2.wf || {};
               const prev = t2.wf.signed || { attempts: 0, history: [] };
               t2.wf.signed = { attempts: (prev.attempts || 0) + 1, history: [...(prev.history || []), { at: now(), file: fname, ...result }], lastFile: fname, receivedAt: now(), result };
-              if (result.complete) t2.status = 'signed'; // incomplete stays 'agreement' (chase sent manually)
-              saveLeads(f2);
-              console.log(`[signed] ${t2.name}: complete=${result.complete} missing=${(result.missing || []).length} -> ${t2.status}`);
-            }
+              if (result.complete) t2.status = 'signed';
+            });
+            console.log(`[signed] ${target.name}: complete=${result.complete} missing=${(result.missing || []).length}`);
           } catch (err) { console.error('[signed] processing failed:', err.message); }
         }
       } else if (st === 'onboarding') {
-        // Awaiting onboarding-session pick — AI parses choice and books (no message sent).
         const r = await parseOnboardingChoice(text, cfg.onboardingSessions);
         if (r.sessionId) {
-          target.status = 'booked';
-          target.wf = { ...(target.wf || {}), onboardingSession: r.sessionId, onboardingSlottedAt: now() };
+          mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.status = 'booked'; t.wf = { ...(t.wf || {}), onboardingSession: r.sessionId, onboardingSlottedAt: now() }; } });
           console.log(`[onboarding] ${target.name} picked ${r.sessionId} -> booked`);
         }
-        saveLeads(fresh);
-      } else {
-        // Any other status — keep the reply + needsReply flag, no change.
-        saveLeads(fresh);
       }
+      // else: reply already captured atomically; nothing more to write.
     }
   });
 
@@ -1386,12 +1386,8 @@ app.post('/api/leads/:id/send', async (req, res) => {
   if (lead.channel === 'telegram' && lead.telegramChatId) {
     const r = await tgSend(lead.telegramChatId, text);
     if (!r || !r.ok) return res.status(502).json({ error: 'Telegram send failed: ' + ((r && r.description) || 'unknown') });
-    if (!lead.sentReplies) lead.sentReplies = [];
-    lead.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'telegram' });
-    lead.lastContactedAt = new Date().toISOString();
-    lead.needsReply = false;
-    saveLeads(leads);
-    return res.json({ ok: true, lead });
+    mutateLeads((ls) => { const l = ls.find((x) => x.id === lead.id); if (!l) return; l.sentReplies = l.sentReplies || []; l.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'telegram' }); l.lastContactedAt = new Date().toISOString(); l.needsReply = false; });
+    return res.json({ ok: true });
   }
   // Compliance: never message someone who opted out.
   if (lead.status === 'opted_out') return res.status(400).json({ error: 'This lead opted out — messaging is blocked.' });
@@ -1403,13 +1399,9 @@ app.post('/api/leads/:id/send', async (req, res) => {
   if (!jid) return res.status(400).json({ error: 'Lead has no valid phone number.' });
   try {
     await sock.sendMessage(jid, { text });
-    if (!lead.sentReplies) lead.sentReplies = [];
-    lead.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'whatsapp' });
-    lead.lastContactedAt = new Date().toISOString();
-    lead.needsReply = false;
-    if (!lead.assignedNumber) { const e = [...conns.entries()].find(([, v]) => v.sock === sock); if (e) lead.assignedNumber = e[0]; }
-    saveLeads(leads);
-    return res.json({ ok: true, lead });
+    const fromNum = lead.assignedNumber || (([...conns.entries()].find(([, v]) => v.sock === sock) || [])[0]);
+    mutateLeads((ls) => { const l = ls.find((x) => x.id === lead.id); if (!l) return; l.sentReplies = l.sentReplies || []; l.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'whatsapp' }); l.lastContactedAt = new Date().toISOString(); l.needsReply = false; if (!l.assignedNumber && fromNum) l.assignedNumber = fromNum; });
+    return res.json({ ok: true });
   } catch (e) { return res.status(502).json({ error: 'WhatsApp send failed: ' + e.message }); }
 });
 
