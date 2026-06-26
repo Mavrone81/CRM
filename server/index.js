@@ -14,6 +14,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { createHmac } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // Data dir is env-overridable so tests can point at an isolated temp dir.
@@ -206,7 +207,7 @@ function classifyKeyword(text) {
   return { category: 'other', confidence: 'low', reason: 'No keyword match (no API key set)', suggested_reply: '' };
 }
 
-async function classifyReplies(name, replies, repName = '') {
+async function classifyReplies(name, replies, repName = '', bookUrl = '') {
   const transcript = replies.map((r) => `- ${r.text}`).join('\n');
   if (!anthropic) return classifyKeyword(replies[replies.length - 1]?.text || '');
 
@@ -225,7 +226,7 @@ ${briefing || '(none scheduled yet — say a date will be confirmed shortly and 
 ONBOARDING (2nd session) — offer these ONLY to someone who has already attended a briefing AND completed/returned their signed agreement:
 ${onboarding || '(none scheduled yet)'}
 === END SESSIONS ===
-
+${bookUrl ? `\nBOOKING LINK — if (and only if) you invite them to pick a session, end your message with this exact link so they can choose a slot themselves:\n${bookUrl}\nPaste the full link verbatim — never alter, shorten, or wrap it.\n` : ''}
 VOICE — write the reply like a REAL person texting, never a template:
 - Vary your wording EVERY time. Never reuse stock openers ("Great!", "Awesome!") or the same sentence structures. Two replies to two different people must never read alike.
 - Sound natural, warm and human — like a friendly colleague texting, not a corporate script. Light and conversational.
@@ -348,6 +349,36 @@ function upcomingSessions(list) {
 // Bullet list of the upcoming sessions for a prompt; '' when none are scheduled.
 function fmtSessions(list) {
   return upcomingSessions(list).map((s) => sessionDisplaySrv(s)).filter(Boolean).map((d) => `• ${d}`).join('\n');
+}
+
+// ── Self-serve slot booking — per-lead signed link the bot drops into WhatsApp ────
+const PUBLIC_URL = (process.env.PUBLIC_URL || 'https://crm.urbanwerkzsg.com').replace(/\/$/, '');
+const BOOK_SECRET = process.env.AUTH_SECRET || 'watapp-booking-fallback-secret';
+const bookSign = (s) => createHmac('sha256', BOOK_SECRET).update(s).digest('base64url');
+function bookingToken(id) { const p = String(id); return `${p}.${bookSign(p)}`; }
+function verifyBookingToken(tok) {
+  if (!tok || typeof tok !== 'string' || !tok.includes('.')) return null;
+  const i = tok.lastIndexOf('.'); const p = tok.slice(0, i), sig = tok.slice(i + 1);
+  if (!p || bookSign(p) !== sig) return null;
+  const id = Number(p); return Number.isInteger(id) ? id : null;
+}
+function bookingUrl(id) { return `${PUBLIC_URL}/book/${bookingToken(id)}`; }
+// Which slot list applies: once they've signed, they pick an ONBOARDING slot; before that, a BRIEFING slot.
+const ONBOARDING_STATUSES = ['signed', 'onboarding', 'booked', 'onboarded'];
+function bookingKind(lead) { return ONBOARDING_STATUSES.includes(lead.status) ? 'onboarding' : 'briefing'; }
+const bookedField = (kind) => (kind === 'onboarding' ? 'onboardingSession' : 'session');
+function bookedCount(leads, kind, sessionId) {
+  const f = bookedField(kind);
+  return leads.filter((l) => l.wf && l.wf[f] === sessionId).length;
+}
+// Upcoming slots with live availability for the booking page.
+function bookingSlots(cfg, leads, kind) {
+  const list = kind === 'onboarding' ? cfg.onboardingSessions : cfg.sessions;
+  return upcomingSessions(list).map((s) => {
+    const booked = bookedCount(leads, kind, s.id);
+    const cap = Number(s.capacity) || 0;
+    return { id: s.id, display: sessionDisplaySrv(s), capacity: cap, booked, full: cap > 0 && booked >= cap };
+  });
 }
 
 // ── Signed-agreement validator (Claude reads the PDF) ────────────────────────────
@@ -764,7 +795,7 @@ async function connectNumber(numId) {
         const fresh = readLeads();
         const l = fresh.find((x) => x.id === id);
         if (!l?.replies?.length) continue;
-        const ai = await classifyReplies(l.name, l.replies, repNameFor(l));
+        const ai = await classifyReplies(l.name, l.replies, repNameFor(l), bookingUrl(l.id));
         l.ai = { ...ai, classifiedAt: new Date().toISOString() };
         if (ai.category === 'interested' && !l.stage) { l.stage = 'brief'; l.wf = { ...(l.wf || {}), enteredAt: new Date().toISOString() }; }
         saveLeads(fresh);
@@ -844,7 +875,7 @@ async function connectNumber(numId) {
       // Slow AI runs OUTSIDE the write; the result is applied via mutateLeads (which
       // re-reads fresh) so concurrent replies are never clobbered.
       if (['new', 'contacted', 'question', 'review'].includes(st)) {
-        const ai = await classifyReplies(target.name, target.replies, repNameFor(target));
+        const ai = await classifyReplies(target.name, target.replies, repNameFor(target), bookingUrl(target.id));
         mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.ai = { ...ai, classifiedAt: now() }; t.status = statusFromCategory(ai.category); } });
         console.log(`[ai] ${target.name}: ${ai.category} -> ${target.status}`);
       } else if (st === 'invited') {
@@ -944,7 +975,7 @@ app.post('/api/classify/all', async (_req, res) => {
   const pending = leads.filter((l) => l.replies?.length && !l.ai);
   let done = 0;
   for (const lead of pending) {
-    const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead));
+    const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead), bookingUrl(lead.id));
     const fresh = readLeads();
     const target = fresh.find((l) => l.id === lead.id);
     target.ai = { ...ai, classifiedAt: new Date().toISOString() };
@@ -990,7 +1021,7 @@ app.post('/api/classify/:id', async (req, res) => {
   if (!lead) return res.status(404).json({ error: 'not found' });
   if (!lead.replies?.length) return res.status(400).json({ error: 'no replies to classify' });
 
-  const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead));
+  const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead), bookingUrl(lead.id));
   const fresh = readLeads();
   const target = fresh.find((l) => l.id === lead.id);
   target.ai = { ...ai, classifiedAt: new Date().toISOString() };
@@ -1080,6 +1111,56 @@ app.delete('/api/leads/:id', (req, res) => {
   if (!removed) return res.status(404).json({ error: 'not found' });
   console.log(`[lead] removed ${removed.name} (#${id})`);
   res.json({ ok: true, removed: { id: removed.id, name: removed.name } });
+});
+
+// ── Self-serve booking (PUBLIC, token-gated) — the /book/<token> page calls these.
+// A lead opens their unique link and picks a slot; capacity is enforced and the
+// pick advances their pipeline status (briefing→scheduled, onboarding→booked).
+app.get('/api/book/:token', (req, res) => {
+  const id = verifyBookingToken(req.params.token);
+  if (id == null) return res.status(404).json({ error: 'This booking link is invalid or has expired.' });
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  const cfg = readConfig();
+  const kind = bookingKind(lead);
+  res.json({
+    name: lead.name,
+    kind, // 'briefing' | 'onboarding'
+    slots: bookingSlots(cfg, leads, kind),
+    current: (lead.wf && lead.wf[bookedField(kind)]) || null,
+  });
+});
+
+app.post('/api/book/:token', (req, res) => {
+  const id = verifyBookingToken(req.params.token);
+  if (id == null) return res.status(404).json({ error: 'This booking link is invalid or has expired.' });
+  const sessionId = req.body.sessionId;
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  const cfg = readConfig();
+  const kind = bookingKind(lead);
+  const list = kind === 'onboarding' ? cfg.onboardingSessions : cfg.sessions;
+  const slot = upcomingSessions(list).find((s) => s.id === sessionId);
+  if (!slot) return res.status(400).json({ error: 'That slot is no longer available — please pick another.' });
+  const f = bookedField(kind);
+  const already = lead.wf && lead.wf[f] === sessionId;
+  const cap = Number(slot.capacity) || 0;
+  if (cap > 0 && bookedCount(leads, kind, sessionId) >= cap && !already) {
+    return res.status(409).json({ error: 'Sorry, that slot just filled up — please pick another.' });
+  }
+  mutateLeads((ls) => {
+    const l = ls.find((x) => x.id === id);
+    if (!l) return;
+    l.wf = l.wf || {};
+    l.wf[f] = sessionId;
+    l.wf.bookedAt = new Date().toISOString();
+    l.status = kind === 'onboarding' ? 'booked' : 'scheduled';
+    l.needsReply = false;
+  });
+  console.log(`[book] ${lead.name} (#${id}) booked ${kind} slot ${sessionId} -> ${kind === 'onboarding' ? 'booked' : 'scheduled'}`);
+  res.json({ ok: true, kind, display: sessionDisplaySrv(slot) });
 });
 
 // Bulk send — must be registered BEFORE /api/send/:id to avoid route shadowing
@@ -1547,7 +1628,7 @@ app.post('/api/leads/:id/reply', async (req, res) => {
   const st = lead.status || deriveStatus(lead);
   if (['new', 'contacted', 'question', 'review'].includes(st) && req.body.classify !== false) {
     try {
-      const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead));
+      const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead), bookingUrl(lead.id));
       const fresh = readLeads();
       const t = fresh.find((l) => l.id === lead.id);
       if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; t.status = statusFromCategory(ai.category); saveLeads(fresh); return res.json({ ok: true, lead: t }); }
@@ -1597,7 +1678,7 @@ app.post('/api/leads/:id/suggest', async (req, res) => {
   try {
     let suggested;
     if (lead.replies?.length) {
-      const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead));
+      const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead), bookingUrl(lead.id));
       suggested = ai.suggested_reply;
       const f = readLeads(); const t = f.find((l) => l.id === lead.id);
       if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; saveLeads(f); }
@@ -1663,7 +1744,7 @@ async function processTgMessage(msg) {
   // Telegram is ban-free, so the bot CONVERSES: classify, advance status if it's
   // still in triage, and auto-reply with the humanised drafted message.
   try {
-    const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead));
+    const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead), bookingUrl(lead.id));
     const f = readLeads(); const t = f.find((l) => l.id === lead.id);
     if (!t) return;
     t.ai = { ...ai, classifiedAt: new Date().toISOString() };
@@ -1713,4 +1794,5 @@ export {
   inSendWindow, classifyKeyword, attendKeyword, readLeads, saveLeads, mutateLeads,
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
+  bookingToken, verifyBookingToken, bookingUrl, bookingKind, bookingSlots,
 };
