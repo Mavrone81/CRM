@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import type { WaNumber, Outreach } from './types';
+import { relTime } from './types';
 import { fmtPhone } from './countryCodes';
 
 const API = '/api/proxy';
@@ -25,6 +26,8 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
     catch { showToast('Network error', false); } finally { setBusy(false); }
   };
   const relink = async (id: string) => { await fetch(`${API}/numbers/${id}/relink`, { method: 'POST' }); showToast('Generating QR…'); refresh(); };
+  const pause = async (id: string, paused: boolean) => { await fetch(`${API}/numbers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused }) }); showToast(paused ? 'Paused — kept out of outreach, still tested every 6h' : 'Resumed'); refresh(); };
+  const testNow = async (id: string) => { const r = await fetch(`${API}/numbers/${id}/probe`, { method: 'POST' }); const d = await r.json().catch(() => ({})); if (r.ok) showToast(`Probe sent to ${d.to || 'control'} — watch for ✓✓`); else showToast(d.error || 'Probe failed', false); refresh(); };
   const remove = async (id: string) => { if (!confirm('Remove this number? Its session is cleared.')) return; await fetch(`${API}/numbers/${id}`, { method: 'DELETE' }); showToast('Removed'); refresh(); };
   const setCap = async (id: string, dailyCap: number) => { await fetch(`${API}/numbers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dailyCap }) }); refresh(); };
   const startOutreach = async () => {
@@ -67,11 +70,22 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
                 {n.phone && <span className="text-xs text-gray-400 font-mono">{fmtPhone(n.phone)}</span>}
                 <span className={`text-xs px-2 py-0.5 rounded-full border ${STATE_CHIP[n.state] || STATE_CHIP.close}`}>{STATE_LABEL[n.state] || n.state}</span>
                 {n.health === 'undelivered' && <span className="text-xs px-2 py-0.5 rounded-full border bg-red-950 border-red-800 text-red-300" title="Sends aren't being delivered — likely shadow-limited. Excluded from outreach.">⚠ not delivering</span>}
+                {n.paused && <span className="text-xs px-2 py-0.5 rounded-full border bg-gray-800 border-gray-600 text-gray-300">⏸ paused</span>}
                 <div className="ml-auto flex gap-2">
+                  <button onClick={() => testNow(n.id)} className="text-xs text-sky-400 hover:text-sky-300">Test</button>
+                  <button onClick={() => pause(n.id, !n.paused)} className="text-xs text-gray-400 hover:text-gray-200">{n.paused ? 'Resume' : 'Pause'}</button>
                   <button onClick={() => relink(n.id)} className="text-xs text-gray-400 hover:text-gray-200">Relink</button>
                   {numbers.length > 1 && <button onClick={() => remove(n.id)} className="text-xs text-gray-500 hover:text-red-400">Remove</button>}
                 </div>
               </div>
+              {n.probe && (
+                <div className="text-[11px] text-gray-500">
+                  Delivery check {relTime(new Date(n.probe.at).toISOString())}:{' '}
+                  {n.probe.delivered ? <span className="text-green-400">✅ delivered — number is working</span>
+                    : n.probe.error ? <span className="text-red-400">❌ {n.probe.error}</span>
+                    : <span className="text-amber-400">⏳ sent, awaiting ✓✓…</span>}
+                </div>
+              )}
               {n.state === 'open' && (
                 <div className="flex items-center gap-2 text-xs">
                   <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden"><div className={`h-full ${(n.sentToday || 0) >= (n.cap || 40) ? 'bg-red-500' : 'bg-green-500'}`} style={{ width: `${Math.min(100, Math.round(((n.sentToday || 0) / (n.cap || 40)) * 100))}%` }} /></div>

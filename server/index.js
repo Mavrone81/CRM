@@ -394,10 +394,18 @@ const firstSock = () => ([...conns.values()].find((c) => c.state === 'open') || 
 const sentMsgs = new Map(); // msgId -> { numId, ts, delivered }
 function trackSent(numId, key) { if (numId && key?.id) sentMsgs.set(key.id, { numId, ts: Date.now(), delivered: false }); }
 function markDelivered(update) {
-  const id = update?.key?.id; if (!id || !sentMsgs.has(id)) return;
+  const id = update?.key?.id; if (!id) return;
   const st = update.update?.status;
   const delivered = (typeof st === 'number' && st >= 3) || (typeof st === 'string' && /DELIVERY|READ|PLAYED/i.test(st));
-  if (delivered) sentMsgs.get(id).delivered = true;
+  if (!delivered) return;
+  if (sentMsgs.has(id)) sentMsgs.get(id).delivered = true;
+  for (const c of conns.values()) {
+    if (c.probe && c.probe.id === id && !c.probe.delivered) {
+      c.probe.delivered = true; c.probe.deliveredAt = Date.now();
+      console.log(`[probe] ${c.label}: recovery probe DELIVERED — number is reaching recipients again`);
+      if (c.health === 'undelivered') c.health = 'ok';
+    }
+  }
 }
 function evalDeliveryHealth() {
   const now = Date.now();
@@ -417,6 +425,37 @@ function evalDeliveryHealth() {
   }
 }
 setInterval(evalDeliveryHealth, 3 * 60 * 1000);
+
+// ── Recovery probe — periodically test paused/flagged numbers for un-ban ────────
+// Sends one message from the number under test to a healthy number and watches
+// for the ✓✓ delivery ack. If it lands, the throttle/ban has eased.
+function pickControl(excludeId) {
+  for (const [numId, c] of conns) {
+    const cfg = numbersCfg().find((n) => n.id === numId);
+    if (numId !== excludeId && c.state === 'open' && c.phone && !(cfg && cfg.paused) && c.health !== 'undelivered') return c;
+  }
+  return null;
+}
+async function probeNumber(numId) {
+  const c = conns.get(numId);
+  if (!c || c.state !== 'open' || !c.sock || !c.phone) return { error: 'number not connected' };
+  const control = pickControl(numId);
+  if (!control) return { error: 'need another healthy connected number to receive the probe' };
+  try {
+    const sent = await c.sock.sendMessage(toJid(control.phone), { text: `(${c.label}) delivery check ${new Date().toISOString().slice(11, 16)} — please ignore` });
+    c.probe = { id: sent?.key?.id || null, at: Date.now(), delivered: false, to: control.label };
+    console.log(`[probe] ${c.label} -> ${control.label}: sent (awaiting delivery ack)`);
+    return { ok: true, to: control.label };
+  } catch (e) { c.probe = { id: null, at: Date.now(), delivered: false, error: e.message }; return { error: e.message }; }
+}
+async function recoveryProbe() {
+  for (const [numId, c] of conns) {
+    const cfg = numbersCfg().find((n) => n.id === numId);
+    if (c.state === 'open' && ((cfg && cfg.paused) || c.health === 'undelivered')) await probeNumber(numId);
+  }
+}
+setInterval(recoveryProbe, 6 * 60 * 60 * 1000); // every 6 hours
+setTimeout(recoveryProbe, 2 * 60 * 1000);       // and once shortly after boot
 
 // ── Per-number guardrails: daily caps + warming ─────────────────────────────────
 const DEFAULT_CAP = 40;
@@ -441,7 +480,7 @@ function sentTodayFor(numId, leads) {
 }
 // A number that can take an outbound send right now: connected + under its cap.
 function numbersWithCapacity(leads) {
-  return numbersCfg().filter((n) => { const c = conns.get(n.id); return c?.state === 'open' && c.health !== 'undelivered' && sentTodayFor(n.id, leads) < warmCap(n); });
+  return numbersCfg().filter((n) => { const c = conns.get(n.id); return !n.paused && c?.state === 'open' && c.health !== 'undelivered' && sentTodayFor(n.id, leads) < warmCap(n); });
 }
 
 // ── Send window (quiet hours) — outreach only sends 07:00–22:30 SGT ──────────────
@@ -808,7 +847,7 @@ app.use(express.json({ limit: '15mb' })); // base64 document uploads
 // Status + QR
 app.get('/api/status', (_req, res) => {
   const leadsForCount = readLeads();
-  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, phone: c.phone || null, health: c.health || 'ok', sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
+  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, phone: c.phone || null, health: c.health || 'ok', paused: !!n.paused, probe: c.probe || null, sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
   const state = anyOpen() ? 'open' : (numbers.some((n) => n.state === 'connecting') ? 'connecting' : 'close');
   const qr = (numbers.find((n) => n.state === 'connecting' && n.qr) || {}).qr || null;
   res.json({ state, qr, numbers, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername }, outreach: { running: outreach.running, queued: outreach.queue.length, sent: outreach.sent, failed: outreach.failed, windowOpen: inSendWindow() } });
@@ -1114,9 +1153,13 @@ app.patch('/api/numbers/:id', (req, res) => {
   if (!n) return res.status(404).json({ error: 'not found' });
   if (req.body.dailyCap != null) n.dailyCap = Math.max(1, Math.min(200, Number(req.body.dailyCap) || DEFAULT_CAP));
   if (typeof req.body.label === 'string' && req.body.label.trim()) n.label = req.body.label.trim();
+  if (typeof req.body.paused === 'boolean') n.paused = req.body.paused;
   writeConfig({ ...readConfig(), numbers: nums });
   res.json({ ok: true });
 });
+
+// Manually run a delivery probe on a number ("test now").
+app.post('/api/numbers/:id/probe', async (req, res) => { const r = await probeNumber(req.params.id); res.status(r.ok ? 200 : 400).json(r); });
 
 // ── Sequenced outreach control ──────────────────────────────────────────────────
 // Start paced outreach to a set of leads (default: all 'new' WhatsApp leads).
