@@ -30,6 +30,7 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
   const testNow = async (id: string) => { const r = await fetch(`${API}/numbers/${id}/probe`, { method: 'POST' }); const d = await r.json().catch(() => ({})); if (r.ok) showToast(`Probe sent to ${d.to || 'control'} — watch for ✓✓`); else showToast(d.error || 'Probe failed', false); refresh(); };
   const remove = async (id: string) => { if (!confirm('Remove this number? Its session is cleared.')) return; await fetch(`${API}/numbers/${id}`, { method: 'DELETE' }); showToast('Removed'); refresh(); };
   const setCap = async (id: string, dailyCap: number) => { await fetch(`${API}/numbers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dailyCap }) }); refresh(); };
+  const setRepName = async (id: string, repName: string) => { await fetch(`${API}/numbers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repName }) }); showToast(repName ? `Rep name set to ${repName}` : 'Rep name cleared'); refresh(); };
   const startOutreach = async () => {
     const over = newLeadCount > remainingCap;
     const msg = `Start paced outreach to ${newLeadCount} New lead(s)?\n\n` +
@@ -78,6 +79,10 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
                   {numbers.length > 1 && <button onClick={() => remove(n.id)} className="text-xs text-gray-500 hover:text-red-400">Remove</button>}
                 </div>
               </div>
+              <label className="flex items-center gap-2 text-xs text-gray-400">
+                <span className="whitespace-nowrap">Rep name</span>
+                <input type="text" defaultValue={n.repName || ''} placeholder="e.g. Vivian — leads see this name" onBlur={(e) => { const v = e.target.value.trim(); if (v !== (n.repName || '')) setRepName(n.id, v); }} className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 focus:outline-none focus:border-green-600" />
+              </label>
               {n.probe && (
                 <div className="text-[11px] text-gray-500">
                   Delivery check {relTime(new Date(n.probe.at).toISOString())}:{' '}

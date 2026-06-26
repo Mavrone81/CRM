@@ -97,7 +97,7 @@ export const lastContactOf = (l: Lead): string | null =>
 export const lastReplyOf = (l: Lead): string | null => maxTs((l.replies || []).map((r) => r.timestamp));
 
 export type Probe = { at: number; delivered: boolean; deliveredAt?: number; to?: string; error?: string };
-export type WaNumber = { id: string; label: string; state: string; qr: string | null; phone?: string | null; health?: string; paused?: boolean; probe?: Probe | null; sentToday?: number; cap?: number; dailyCap?: number };
+export type WaNumber = { id: string; label: string; repName?: string; state: string; qr: string | null; phone?: string | null; health?: string; paused?: boolean; probe?: Probe | null; sentToday?: number; cap?: number; dailyCap?: number };
 export type Outreach = { running: boolean; queued: number; sent: number; failed: number; windowOpen?: boolean };
 export type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean; autoReply?: boolean; numbers?: WaNumber[]; telegram?: { state: string; username: string }; outreach?: Outreach };
 
