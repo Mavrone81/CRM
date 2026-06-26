@@ -70,7 +70,14 @@ export default function Analytics({ leads }: { leads: Lead[] }) {
     { label: 'On-board', n: onboarded, color: 'bg-emerald-400' },
   ];
 
-  const sessionFill = (config?.sessions || []).map((s) => ({ label: sessionDisplay(s), n: leads.filter((l) => l.wf?.session === s.id && rank(l) >= PIPELINE_ORDER.indexOf('scheduled')).length, cap: s.capacity }));
+  const notClosed = (l: Lead) => l.status !== 'declined' && l.status !== 'opted_out';
+  const sessionRows = (list: Config['sessions'] | undefined, kind: 'briefing' | 'onboarding') =>
+    [...(list || [])].sort((a, b) => (a.date || '').localeCompare(b.date || '')).map((s) => {
+      const names = leads.filter((l) => (kind === 'onboarding' ? l.wf?.onboardingSession : l.wf?.session) === s.id && notClosed(l)).map((l) => l.name);
+      return { id: s.id, display: sessionDisplay(s), cap: Number(s.capacity) || 0, names };
+    });
+  const briefingRows = sessionRows(config?.sessions, 'briefing');
+  const onboardingRows = sessionRows(config?.onboardingSessions, 'onboarding');
 
   const Bar = ({ label, n, denom, color, conv }: { label: string; n: number; denom: number; color: string; conv?: number | null }) => {
     const p = pct(n, denom);
@@ -79,6 +86,21 @@ export default function Analytics({ leads }: { leads: Lead[] }) {
         <span className="w-24 sm:w-32 shrink-0 text-xs text-gray-400 text-right">{label}</span>
         <div className="flex-1 h-6 bg-gray-900 rounded-md overflow-hidden border border-gray-800"><div className={`h-full ${color}`} style={{ width: `${Math.max(p, n > 0 ? 3 : 0)}%` }} /></div>
         <span className="w-24 shrink-0 text-xs text-gray-300 tabular-nums">{n} <span className="text-gray-600">{p}%</span>{conv != null && <span className="text-emerald-400/80"> ↓{conv}%</span>}</span>
+      </div>
+    );
+  };
+
+  const sessRow = (r: { id: string; display: string; cap: number; names: string[] }) => {
+    const full = r.cap > 0 && r.names.length >= r.cap;
+    const p = r.cap > 0 ? Math.min(100, Math.round((r.names.length / r.cap) * 100)) : (r.names.length ? 100 : 0);
+    return (
+      <div key={r.id} className="py-2 border-b border-gray-800/60 last:border-0 flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-200 flex-1">{r.display || '(no date set)'}</span>
+          <span className={`text-xs tabular-nums shrink-0 ${full ? 'text-red-400' : 'text-gray-300'}`}>{r.names.length}{r.cap ? `/${r.cap}` : ''} booked</span>
+        </div>
+        <div className="h-1.5 bg-gray-900 rounded-full overflow-hidden border border-gray-800"><div className={`h-full ${full ? 'bg-red-500' : 'bg-cyan-500'}`} style={{ width: `${p}%` }} /></div>
+        {r.names.length > 0 && <div className="text-[11px] text-gray-500 truncate" title={r.names.join(', ')}>{r.names.join(', ')}</div>}
       </div>
     );
   };
@@ -95,6 +117,22 @@ export default function Analytics({ leads }: { leads: Lead[] }) {
           </div>
         ))}
       </div>
+      {(briefingRows.length > 0 || onboardingRows.length > 0) && (
+        <div className="rounded-xl border border-gray-800 bg-gray-900/40 p-4">
+          <h3 className="text-sm font-semibold text-gray-200 mb-1">📅 Session calendar</h3>
+          <p className="text-[11px] text-gray-600 mb-4">how many leads are booked into each session, soonest first</p>
+          <div className="grid sm:grid-cols-2 gap-x-8 gap-y-2">
+            <div>
+              <div className="text-xs text-purple-300 font-medium mb-1">Briefing (1st, face-to-face)</div>
+              {briefingRows.length === 0 ? <p className="text-xs text-gray-600">None scheduled.</p> : briefingRows.map((r) => sessRow(r))}
+            </div>
+            <div>
+              <div className="text-xs text-sky-300 font-medium mb-1 mt-3 sm:mt-0">Onboarding</div>
+              {onboardingRows.length === 0 ? <p className="text-xs text-gray-600">None scheduled.</p> : onboardingRows.map((r) => sessRow(r))}
+            </div>
+          </div>
+        </div>
+      )}
       <div>
         <h3 className="text-sm font-semibold text-gray-200 mb-3">Key rates</h3>
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
@@ -122,10 +160,6 @@ export default function Analytics({ leads }: { leads: Lead[] }) {
           <div className="rounded-xl border border-gray-800 bg-gray-900/40 p-4">
             <h3 className="text-sm font-semibold text-gray-200 mb-4">Pipeline distribution <span className="text-gray-600 font-normal">(current status)</span></h3>
             <div className="flex flex-col gap-2">{dist.map((s) => <Bar key={s.key} label={s.label} n={s.n} denom={inPipeline} color="bg-cyan-500" />)}{inPipeline === 0 && <p className="text-xs text-gray-600">No leads in the pipeline.</p>}</div>
-          </div>
-          <div className="rounded-xl border border-gray-800 bg-gray-900/40 p-4">
-            <h3 className="text-sm font-semibold text-gray-200 mb-4">Session fill</h3>
-            <div className="flex flex-col gap-2">{sessionFill.length === 0 && <p className="text-xs text-gray-600">No sessions configured.</p>}{sessionFill.map((s) => <Bar key={s.label} label={s.label} n={s.n} denom={s.cap} color={s.n >= s.cap ? 'bg-red-500' : 'bg-cyan-500'} />)}</div>
           </div>
         </div>
       </div>

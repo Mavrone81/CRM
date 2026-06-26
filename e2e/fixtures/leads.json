@@ -85,5 +85,139 @@
       { "text": "Is there any upfront cost involved?", "timestamp": "2026-06-08T03:00:00.000Z" }
     ],
     "status": "question"
+  },
+  {
+    "id": 10,
+    "name": "Liam Briefing",
+    "phone": "6591110010",
+    "email": "liam@example.com",
+    "notes": "",
+    "adviser": "",
+    "created": "2026-06-10T00:00:00.000Z",
+    "sent": true,
+    "sentAt": "2026-06-10T01:00:00.000Z",
+    "channel": "whatsapp",
+    "replies": [],
+    "status": "invited"
+  },
+  {
+    "id": 11,
+    "name": "Mia Signed",
+    "phone": "6591110011",
+    "email": "mia@example.com",
+    "notes": "",
+    "adviser": "",
+    "created": "2026-06-10T00:00:00.000Z",
+    "sent": true,
+    "sentAt": "2026-06-10T01:00:00.000Z",
+    "channel": "whatsapp",
+    "replies": [],
+    "status": "signed"
+  },
+  {
+    "id": 12,
+    "name": "Greg Removable",
+    "phone": "6591110012",
+    "email": "greg@example.com",
+    "notes": "",
+    "adviser": "",
+    "created": "2026-06-10T00:00:00.000Z",
+    "sent": true,
+    "sentAt": "2026-06-10T01:00:00.000Z",
+    "channel": "whatsapp",
+    "replies": [],
+    "status": "contacted"
+  },
+  {
+    "id": 13,
+    "name": "Hank Keeper",
+    "phone": "6591110013",
+    "email": "hank@example.com",
+    "notes": "",
+    "adviser": "",
+    "created": "2026-06-10T00:00:00.000Z",
+    "sent": true,
+    "sentAt": "2026-06-10T01:00:00.000Z",
+    "channel": "whatsapp",
+    "replies": [],
+    "status": "contacted"
+  },
+  {
+    "id": 14,
+    "name": "Ivy Suggested",
+    "phone": "6591110014",
+    "email": "ivy@example.com",
+    "notes": "",
+    "adviser": "",
+    "created": "2026-06-10T00:00:00.000Z",
+    "sent": true,
+    "sentAt": "2026-06-10T01:00:00.000Z",
+    "channel": "whatsapp",
+    "assignedNumber": "n1",
+    "replies": [
+      { "text": "Yes I'm interested, can you tell me more?", "timestamp": "2026-06-11T03:00:00.000Z" }
+    ],
+    "ai": {
+      "category": "interested",
+      "confidence": "low",
+      "reason": "Keyword match (no API key set)",
+      "suggested_reply": "Happy to share more — here are a few details to get you started.",
+      "classifiedAt": "2026-06-11T03:01:00.000Z"
+    },
+    "status": "interested"
+  },
+  {
+    "id": 15,
+    "name": "Jack Nosuggest",
+    "phone": "6591110015",
+    "email": "jack@example.com",
+    "notes": "",
+    "adviser": "",
+    "created": "2026-06-10T00:00:00.000Z",
+    "sent": true,
+    "sentAt": "2026-06-10T01:00:00.000Z",
+    "channel": "whatsapp",
+    "assignedNumber": "n1",
+    "replies": [],
+    "status": "interested"
+  },
+  {
+    "id": 16,
+    "name": "Kara Collapse",
+    "phone": "6591110016",
+    "email": "kara@example.com",
+    "notes": "",
+    "adviser": "",
+    "created": "2026-06-10T00:00:00.000Z",
+    "sent": true,
+    "sentAt": "2026-06-10T01:00:00.000Z",
+    "channel": "whatsapp",
+    "needsReply": true,
+    "replies": [
+      { "text": "Quick question about timing?", "timestamp": "2026-06-11T03:00:00.000Z" }
+    ],
+    "ai": {
+      "category": "question",
+      "confidence": "low",
+      "reason": "Contains a question mark",
+      "suggested_reply": "",
+      "classifiedAt": "2026-06-11T03:01:00.000Z"
+    },
+    "status": "question"
+  },
+  {
+    "id": 17,
+    "name": "Fiona Filler",
+    "phone": "6591110017",
+    "email": "fiona@example.com",
+    "notes": "",
+    "adviser": "",
+    "created": "2026-06-10T00:00:00.000Z",
+    "sent": true,
+    "sentAt": "2026-06-10T01:00:00.000Z",
+    "channel": "whatsapp",
+    "replies": [],
+    "wf": { "session": "full1", "bookedAt": "2026-06-12T03:00:00.000Z" },
+    "status": "scheduled"
   }
 ]

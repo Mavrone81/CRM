@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SESSION_COOKIE, verifyToken } from '@/lib/auth';
 
-// Paths reachable without a session: the login page itself and the auth endpoints.
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout'];
+// Paths reachable without a session: the login page itself, the auth endpoints,
+// and the self-serve booking page + its API (each is gated by a per-lead HMAC
+// token, so it is safe — and intended — to be reachable without logging in).
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/book', '/api/proxy/book'];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;

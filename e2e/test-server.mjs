@@ -4,7 +4,7 @@
 // being transmitted. Because NODE_ENV=test, index.js does NOT auto-connect
 // WhatsApp/Telegram nor start its own HTTP listener — we listen here ourselves.
 
-import { cpSync, mkdtempSync } from 'node:fs';
+import { cpSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +22,7 @@ delete process.env.ANTHROPIC_API_KEY; // force keyword-fallback classification (
 delete process.env.TELEGRAM_TOKEN;    // don't start the Telegram long-poll
 
 // 3) Import the real server module (exports app + conns; does not boot under test).
-const { app, conns } = await import('../server/index.js');
+const { app, conns, bookingToken } = await import('../server/index.js');
 
 // 4) Inject fake OPEN sockets for the three configured numbers. sendMessage just
 //    records the outbound message and returns a Baileys-shaped ack { key: { id } }.
@@ -51,6 +51,13 @@ for (const [numId, phone] of [['n1', '6511110001'], ['n2', '6511110002'], ['n3',
     qr: null,
   });
 }
+
+// 4b) Publish valid booking tokens for a couple of fixture leads so the booking
+//     spec can read them (token = HMAC(leadId), computed by this same server
+//     module that also verifies them, so they stay consistent regardless of secret).
+//     #10 = Liam Briefing (invited -> briefing kind), #11 = Mia Signed (-> onboarding kind).
+const bookTokens = { briefing: bookingToken(10), signed: bookingToken(11), 10: bookingToken(10), 11: bookingToken(11) };
+writeFileSync(join(__dirname, '.book-tokens.json'), JSON.stringify(bookTokens, null, 2));
 
 // 5) Listen ourselves (index.js skips app.listen under NODE_ENV=test).
 const PORT = Number(process.env.PORT) || 10001;

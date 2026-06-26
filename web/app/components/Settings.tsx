@@ -44,7 +44,7 @@ export default function Settings({ onClose, showToast }: { onClose: () => void; 
           <div className="flex gap-2 items-center flex-wrap sm:flex-nowrap">
             <input type="date" value={s.date || ''} onChange={(e) => set((d) => d.map((x, j) => j === i ? { ...x, date: e.target.value } : x))} className="w-40 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
             <input type="time" value={s.time || ''} onChange={(e) => set((d) => d.map((x, j) => j === i ? { ...x, time: e.target.value } : x))} className="w-28 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
-            <input type="number" min={1} value={s.capacity} title="Capacity" onChange={(e) => set((d) => d.map((x, j) => j === i ? { ...x, capacity: Number(e.target.value) } : x))} className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+            <input type="number" min={0} value={s.capacity || ''} title="Capacity" placeholder="cap" onChange={(e) => set((d) => d.map((x, j) => j === i ? { ...x, capacity: e.target.value === '' ? 0 : Math.max(0, parseInt(e.target.value, 10) || 0) } : x))} className="w-16 bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
             <button onClick={() => set((d) => d.filter((_, j) => j !== i))} className="text-gray-500 hover:text-red-400 px-2">✕</button>
           </div>
           <span className="text-xs text-gray-400 pl-1">→ {sessionDisplay(s)} · cap {s.capacity}</span>
