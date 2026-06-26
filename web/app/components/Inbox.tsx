@@ -14,6 +14,7 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
   const [composeFor, setComposeFor] = useState<number | null>(null);
   const [composeText, setComposeText] = useState('');
   const [suggesting, setSuggesting] = useState<number | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
 
   const suggest = async (id: number) => {
     setSuggesting(id);
@@ -36,11 +37,14 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
     catch { showToast('Network error', false); } finally { mark(id, false); }
   };
 
+  const allCollapsed = queue.length > 0 && queue.every((l) => collapsed.has(l.id));
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 flex flex-wrap items-center gap-3">
         <h2 className="text-base sm:text-lg font-semibold text-gray-100">Action Inbox</h2>
         <span className="text-xs sm:text-sm text-gray-500">{queue.length} need a decision</span>
+        {queue.length > 0 && <button onClick={() => setCollapsed(allCollapsed ? new Set() : new Set(queue.map((l) => l.id)))} className="ml-auto text-xs text-gray-400 hover:text-gray-200 border border-gray-700 rounded-lg px-2.5 py-1">{allCollapsed ? 'Expand all' : 'Collapse all'}</button>}
       </div>
       <div className="flex-1 overflow-auto p-4 sm:p-6 flex flex-col gap-3">
         {queue.length === 0 && <div className="text-center text-gray-600 py-16">Nothing to triage — all replies have been actioned. 🎉</div>}
@@ -50,6 +54,8 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
             ...(l.sentReplies || []).map((r) => ({ text: r.text, ts: r.timestamp, dir: 'out' as const, auto: !!r.auto })),
           ].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
           const b = busy.has(l.id);
+          const isCol = collapsed.has(l.id);
+          const lastMsg = thread[thread.length - 1];
           return (
             <div key={l.id} className={`rounded-xl border p-4 flex flex-col gap-2 ${l.status === 'question' ? 'border-yellow-800/50 bg-yellow-950/10' : l.status === 'new' ? 'border-gray-700 bg-gray-900/40' : 'border-orange-800/40 bg-orange-950/10'}`}>
               <div className="flex items-center gap-2 flex-wrap">
@@ -58,7 +64,11 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
                 <span className={`text-xs px-2 py-0.5 rounded-full ${l.status === 'question' ? 'bg-yellow-900 text-yellow-300' : l.status === 'new' ? 'bg-gray-800 text-gray-300' : 'bg-orange-900/60 text-orange-300'}`}>{l.status === 'question' ? '? Question' : l.status === 'new' ? 'New — to contact' : 'Needs review'}</span>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${l.channel === 'telegram' ? 'bg-sky-950 border-sky-800 text-sky-300' : 'bg-green-950 border-green-800 text-green-300'}`}>{l.channel === 'telegram' ? '✈ Telegram' : 'WhatsApp'}</span>
                 {l.needsReply && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new</span>}
+                <button onClick={() => setCollapsed((c) => { const n = new Set(c); if (n.has(l.id)) n.delete(l.id); else n.add(l.id); return n; })} className="ml-auto text-gray-500 hover:text-gray-200 text-xs whitespace-nowrap px-1" title={isCol ? 'Expand' : 'Collapse'}>{isCol ? '▸ expand' : '▾ collapse'}</button>
               </div>
+              {isCol ? (
+                lastMsg ? <p className="text-xs text-gray-500 truncate">{lastMsg.dir === 'out' ? 'You: ' : ''}{lastMsg.text}</p> : null
+              ) : (<>
               {thread.length > 0 && (
                 <div className="flex flex-col gap-1.5 max-h-64 overflow-auto py-1">
                   {thread.map((m, i) => (
@@ -98,6 +108,7 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
                   <button onClick={() => replyText.trim() && act(l.id, () => logReply(l.id, replyText.trim()), 'Reply logged').then(() => setReplyFor(null))} className="bg-blue-700 hover:bg-blue-600 text-white text-sm px-3 py-2 rounded-lg">Save</button>
                 </div>
               )}
+              </>)}
             </div>
           );
         })}
