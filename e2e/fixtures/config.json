@@ -1,0 +1,22 @@
+{
+  "autoReply": false,
+  "numbers": [
+    { "id": "n1", "label": "Number 1" },
+    { "id": "n2", "label": "Number 2" },
+    { "id": "n3", "label": "Number 3" }
+  ],
+  "sessions": [
+    { "id": "thu", "date": "2026-07-02", "time": "19:30", "capacity": 10 },
+    { "id": "sun", "date": "2026-07-05", "time": "14:00", "capacity": 10 }
+  ],
+  "onboardingSessions": [
+    { "id": "ob1", "date": "2026-07-06", "time": "19:00", "capacity": 10 },
+    { "id": "ob2", "date": "2026-07-11", "time": "10:00", "capacity": 10 }
+  ],
+  "requiredFields": [
+    "Full name (as in NRIC)",
+    "NRIC number",
+    "Mobile number",
+    "Associate's signature"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "watapp-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright end-to-end tests for the Watapp/CRM full stack (web + faked-WhatsApp backend).",
+  "scripts": {
+    "test": "playwright test",
+    "test:full": "npm --prefix ../web run build && playwright test",
+    "build:web": "npm --prefix ../web run build"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0"
+  }
+}
