@@ -96,7 +96,7 @@ export const lastContactOf = (l: Lead): string | null =>
 // Last time they replied (inbound).
 export const lastReplyOf = (l: Lead): string | null => maxTs((l.replies || []).map((r) => r.timestamp));
 
-export type WaNumber = { id: string; label: string; state: string; qr: string | null; phone?: string | null; sentToday?: number; cap?: number; dailyCap?: number };
+export type WaNumber = { id: string; label: string; state: string; qr: string | null; phone?: string | null; health?: string; sentToday?: number; cap?: number; dailyCap?: number };
 export type Outreach = { running: boolean; queued: number; sent: number; failed: number; windowOpen?: boolean };
 export type WaStatus = { state: 'open' | 'connecting' | 'close'; qr: string | null; ai?: boolean; autoReply?: boolean; numbers?: WaNumber[]; telegram?: { state: string; username: string }; outreach?: Outreach };
 

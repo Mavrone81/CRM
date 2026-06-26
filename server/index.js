@@ -387,6 +387,37 @@ function sockForLead(lead) {
 }
 const firstSock = () => ([...conns.values()].find((c) => c.state === 'open') || {}).sock;
 
+// ── Delivery-receipt monitoring — auto-detect shadow-banned / non-delivering numbers
+// A healthy number's sends get a ✓✓ (DELIVERY_ACK). A shadow-limited number gets
+// only a server ack (✓) and never delivers. We track recent sends per number and
+// flag any whose delivery rate collapses, so outreach auto-skips it.
+const sentMsgs = new Map(); // msgId -> { numId, ts, delivered }
+function trackSent(numId, key) { if (numId && key?.id) sentMsgs.set(key.id, { numId, ts: Date.now(), delivered: false }); }
+function markDelivered(update) {
+  const id = update?.key?.id; if (!id || !sentMsgs.has(id)) return;
+  const st = update.update?.status;
+  const delivered = (typeof st === 'number' && st >= 3) || (typeof st === 'string' && /DELIVERY|READ|PLAYED/i.test(st));
+  if (delivered) sentMsgs.get(id).delivered = true;
+}
+function evalDeliveryHealth() {
+  const now = Date.now();
+  const byNum = {};
+  for (const [id, m] of sentMsgs) {
+    if (now - m.ts > 6 * 60 * 60 * 1000) { sentMsgs.delete(id); continue; } // forget after 6h
+    if (now - m.ts < 3 * 60 * 1000) continue;                                // give 3 min to deliver
+    const b = byNum[m.numId] || (byNum[m.numId] = { sent: 0, delivered: 0 });
+    b.sent++; if (m.delivered) b.delivered++;
+  }
+  for (const [numId, c] of conns) {
+    const stat = byNum[numId];
+    if (!stat || stat.sent < 5) continue; // need a sample before judging
+    const rate = stat.delivered / stat.sent;
+    if (rate < 0.2 && c.health !== 'undelivered') { c.health = 'undelivered'; console.log(`[health] ${c.label}: only ${stat.delivered}/${stat.sent} delivered — FLAGGED not delivering (excluded from outreach)`); }
+    else if (rate >= 0.2 && c.health === 'undelivered') { c.health = 'ok'; console.log(`[health] ${c.label}: deliveries recovered (${stat.delivered}/${stat.sent})`); }
+  }
+}
+setInterval(evalDeliveryHealth, 3 * 60 * 1000);
+
 // ── Per-number guardrails: daily caps + warming ─────────────────────────────────
 const DEFAULT_CAP = 40;
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -410,7 +441,7 @@ function sentTodayFor(numId, leads) {
 }
 // A number that can take an outbound send right now: connected + under its cap.
 function numbersWithCapacity(leads) {
-  return numbersCfg().filter((n) => conns.get(n.id)?.state === 'open' && sentTodayFor(n.id, leads) < warmCap(n));
+  return numbersCfg().filter((n) => { const c = conns.get(n.id); return c?.state === 'open' && c.health !== 'undelivered' && sentTodayFor(n.id, leads) < warmCap(n); });
 }
 
 // ── Send window (quiet hours) — outreach only sends 07:00–22:30 SGT ──────────────
@@ -453,7 +484,8 @@ async function outreachTick() {
   try {
     const sock = conns.get(numId)?.sock;
     const text = buildMessage(lead.name); // spintax opening — varied every send
-    await sock.sendMessage(toJid(lead.phone), { text });
+    const sent = await sock.sendMessage(toJid(lead.phone), { text });
+    trackSent(numId, sent?.key);
     mutateLeads((ls) => {
       const l = ls.find((x) => x.id === lead.id); if (!l) return;
       l.assignedNumber = numId;
@@ -638,6 +670,9 @@ async function connectNumber(numId) {
   });
 
   // Track incoming replies
+  // Delivery receipts: mark our sent messages delivered (drives health monitoring).
+  sock.ev.on('messages.update', (updates) => { for (const u of updates) markDelivered(u); });
+
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     for (const m of messages) rememberMessage(m); // store ALL (incl. our sent) for retries
     if (type !== 'notify') return;
@@ -773,7 +808,7 @@ app.use(express.json({ limit: '15mb' })); // base64 document uploads
 // Status + QR
 app.get('/api/status', (_req, res) => {
   const leadsForCount = readLeads();
-  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, phone: c.phone || null, sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
+  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, phone: c.phone || null, health: c.health || 'ok', sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
   const state = anyOpen() ? 'open' : (numbers.some((n) => n.state === 'connecting') ? 'connecting' : 'close');
   const qr = (numbers.find((n) => n.state === 'connecting' && n.qr) || {}).qr || null;
   res.json({ state, qr, numbers, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername }, outreach: { running: outreach.running, queued: outreach.queue.length, sent: outreach.sent, failed: outreach.failed, windowOpen: inSendWindow() } });
@@ -1397,9 +1432,10 @@ app.post('/api/leads/:id/send', async (req, res) => {
   if (!sock) return res.status(503).json({ error: 'No connected WhatsApp number available for this lead.' });
   const jid = toJid(lead.phone);
   if (!jid) return res.status(400).json({ error: 'Lead has no valid phone number.' });
+  const fromNum = lead.assignedNumber || (([...conns.entries()].find(([, v]) => v.sock === sock) || [])[0]);
   try {
-    await sock.sendMessage(jid, { text });
-    const fromNum = lead.assignedNumber || (([...conns.entries()].find(([, v]) => v.sock === sock) || [])[0]);
+    const sent = await sock.sendMessage(jid, { text });
+    trackSent(fromNum, sent?.key);
     mutateLeads((ls) => { const l = ls.find((x) => x.id === lead.id); if (!l) return; l.sentReplies = l.sentReplies || []; l.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'whatsapp' }); l.lastContactedAt = new Date().toISOString(); l.needsReply = false; if (!l.assignedNumber && fromNum) l.assignedNumber = fromNum; });
     return res.json({ ok: true });
   } catch (e) { return res.status(502).json({ error: 'WhatsApp send failed: ' + e.message }); }

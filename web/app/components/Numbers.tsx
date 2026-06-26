@@ -66,6 +66,7 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
                 <span className="font-medium text-gray-200">{n.label}</span>
                 {n.phone && <span className="text-xs text-gray-400 font-mono">{fmtPhone(n.phone)}</span>}
                 <span className={`text-xs px-2 py-0.5 rounded-full border ${STATE_CHIP[n.state] || STATE_CHIP.close}`}>{STATE_LABEL[n.state] || n.state}</span>
+                {n.health === 'undelivered' && <span className="text-xs px-2 py-0.5 rounded-full border bg-red-950 border-red-800 text-red-300" title="Sends aren't being delivered — likely shadow-limited. Excluded from outreach.">⚠ not delivering</span>}
                 <div className="ml-auto flex gap-2">
                   <button onClick={() => relink(n.id)} className="text-xs text-gray-400 hover:text-gray-200">Relink</button>
                   {numbers.length > 1 && <button onClick={() => remove(n.id)} className="text-xs text-gray-500 hover:text-red-400">Remove</button>}
