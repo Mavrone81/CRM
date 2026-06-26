@@ -1274,11 +1274,12 @@ app.post('/api/documents/:id/default', (req, res) => {
 // ── Pipeline stage actions ───────────────────────────────────────────────────────
 function findLead(leads, id) { return leads.find((l) => l.id === Number(id)); }
 
-async function sendDocumentsTo(jid, docs, caption) {
+async function sendDocumentsTo(jid, docs, caption, sock) {
+  const s = sock || firstSock();
   for (let i = 0; i < docs.length; i++) {
     const d = docs[i];
     const buf = readFileSync(join(DOCS_DIR, d.file));
-    await firstSock().sendMessage(jid, { document: buf, fileName: d.name, mimetype: d.mimetype || 'application/pdf', caption: i === 0 ? caption : undefined });
+    await s.sendMessage(jid, { document: buf, fileName: d.name, mimetype: d.mimetype || 'application/pdf', caption: i === 0 ? caption : undefined });
     if (i < docs.length - 1) await new Promise((r) => setTimeout(r, 1500));
   }
 }
@@ -1358,6 +1359,10 @@ app.post('/api/wf/agreement/:id', async (req, res) => {
   if (!lead) return res.status(404).json({ error: 'not found' });
   const jid = toJid(lead.phone);
   if (!jid) return res.status(400).json({ error: 'invalid phone number' });
+  // Send from the lead's OWN sticky number so the agreement lands in the same
+  // thread the rep has been chatting in (not a random firstSock number).
+  const sock = sockForLead(lead);
+  if (!sock) return res.status(503).json({ error: 'No connected WhatsApp number available for this lead.' });
   const all = readDocs();
   let chosen = Array.isArray(req.body.fileIds) && req.body.fileIds.length
     ? all.filter((d) => req.body.fileIds.includes(d.id))
@@ -1366,12 +1371,15 @@ app.post('/api/wf/agreement/:id', async (req, res) => {
   if (!chosen.length) return res.status(400).json({ error: 'no documents available to send' });
   try {
     const caption = req.body.caption || `Hi ${lead.name}, here is the associate agreement. Please review, sign, and send the signed PDF back to me here.`;
-    await sendDocumentsTo(jid, chosen, caption);
+    await sendDocumentsTo(jid, chosen, caption, sock);
     const ts = new Date().toISOString();
     lead.stage = 'agreement_sent';
+    lead.status = 'agreement';
     lead.wf = { ...(lead.wf || {}), agreement: { sentAt: ts, fileIds: chosen.map((d) => d.id), fileNames: chosen.map((d) => d.name) } };
+    lead.lastContactedAt = ts;
     if (!lead.sentReplies) lead.sentReplies = [];
-    lead.sentReplies.push({ text: `[sent agreement: ${chosen.map((d) => d.name).join(', ')}]`, timestamp: ts, kind: 'agreement' });
+    lead.sentReplies.push({ text: caption, timestamp: ts, channel: 'whatsapp', kind: 'agreement' });
+    lead.sentReplies.push({ text: `[attached: ${chosen.map((d) => d.name).join(', ')}]`, timestamp: ts, channel: 'whatsapp', kind: 'agreement' });
     saveLeads(leads);
     console.log(`[wf] agreement -> ${lead.name} (${chosen.length} file/s)`);
     res.json({ ok: true, lead });
