@@ -14,6 +14,13 @@ const GROUPS: { key: string; label: string }[] = [
   { key: 'closed', label: 'Closed' },
 ];
 
+const COUNTRY_CODES = [
+  { code: '65', label: '🇸🇬 +65' }, { code: '60', label: '🇲🇾 +60' }, { code: '62', label: '🇮🇩 +62' },
+  { code: '63', label: '🇵🇭 +63' }, { code: '66', label: '🇹🇭 +66' }, { code: '84', label: '🇻🇳 +84' },
+  { code: '91', label: '🇮🇳 +91' }, { code: '86', label: '🇨🇳 +86' }, { code: '852', label: '🇭🇰 +852' },
+  { code: '1', label: '🇺🇸 +1' }, { code: '44', label: '🇬🇧 +44' }, { code: '61', label: '🇦🇺 +61' },
+];
+
 type ImportRow = { name: string; phone: string; email: string; notes: string; adviser: string };
 // Parse CSV (quoted fields supported). Maps flexible headers; falls back to
 // name,phone,email column order when there's no recognisable header row.
@@ -65,10 +72,10 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
   const [replyFor, setReplyFor] = useState<number | null>(null);
   const [replyText, setReplyText] = useState('');
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', notes: '', adviser: '' });
+  const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', notes: '', adviser: '', cc: '65' });
   const [saving, setSaving] = useState(false);
   const [edit, setEdit] = useState<Lead | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', phone: '', email: '', notes: '', adviser: '', assignedNumber: '' });
+  const [editForm, setEditForm] = useState({ name: '', phone: '', email: '', notes: '', adviser: '', assignedNumber: '', cc: '65' });
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<{ added: number; total: number; skipped: { name: string; phone: string; reason: string }[] } | null>(null);
 
@@ -105,7 +112,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
   };
 
   const numLabel = (id?: string) => numbers.find((n) => n.id === id)?.label || (id ? id : '—');
-  const openEdit = (l: Lead) => { setEdit(l); setEditForm({ name: l.name || '', phone: l.phone || '', email: l.email || '', notes: l.notes || '', adviser: l.adviser || '', assignedNumber: (l as Lead & { assignedNumber?: string }).assignedNumber || '' }); };
+  const openEdit = (l: Lead) => { setEdit(l); setEditForm({ name: l.name || '', phone: l.phone || '', email: l.email || '', notes: l.notes || '', adviser: l.adviser || '', assignedNumber: (l as Lead & { assignedNumber?: string }).assignedNumber || '', cc: '65' }); };
   const saveEdit = async () => {
     if (!edit) return;
     setSaving(true);
@@ -157,7 +164,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
       if (confirm(`⚠ Possible duplicate (matched by ${d.matchedBy}):\n\n${e.name} — ${e.phone} (${e.status || 'lead'})\n\nAdd this new lead anyway?`)) return doAdd(true);
       return;
     }
-    if (r.ok) { showToast(`Added ${addForm.name}`); setAddForm({ name: '', phone: '', email: '', notes: '', adviser: '' }); setShowAdd(false); refresh(); }
+    if (r.ok) { showToast(`Added ${addForm.name}`); setAddForm({ name: '', phone: '', email: '', notes: '', adviser: '', cc: '65' }); setShowAdd(false); refresh(); }
     else showToast('Failed to add', false);
   };
   const addLead = async () => {
@@ -272,7 +279,14 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
               {([['Name *', 'name'], ['Phone *', 'phone'], ['Email', 'email'], ['Adviser', 'adviser'], ['Notes', 'notes']] as const).map(([label, key]) => (
                 <div key={key} className="flex flex-col gap-1">
                   <label className="text-xs font-medium text-gray-400">{label}</label>
-                  <input value={addForm[key]} onChange={(e) => setAddForm((p) => ({ ...p, [key]: e.target.value }))} className="min-h-[44px] bg-gray-800 border border-gray-700 rounded-lg px-3 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                  {key === 'phone' ? (
+                    <div className="flex gap-2">
+                      <select value={addForm.cc} onChange={(e) => setAddForm((p) => ({ ...p, cc: e.target.value }))} className="min-h-[44px] bg-gray-800 border border-gray-700 rounded-lg px-2 text-sm text-gray-200 focus:outline-none focus:border-green-600">{COUNTRY_CODES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}</select>
+                      <input value={addForm.phone} onChange={(e) => setAddForm((p) => ({ ...p, phone: e.target.value }))} placeholder="9123 4567" className="flex-1 min-w-0 min-h-[44px] bg-gray-800 border border-gray-700 rounded-lg px-3 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                    </div>
+                  ) : (
+                    <input value={addForm[key]} onChange={(e) => setAddForm((p) => ({ ...p, [key]: e.target.value }))} className="min-h-[44px] bg-gray-800 border border-gray-700 rounded-lg px-3 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                  )}
                 </div>
               ))}
             </div>
@@ -296,8 +310,15 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
             <div className="flex flex-col gap-4">
               {([['Name', 'name'], ['Phone', 'phone'], ['Email', 'email'], ['Adviser', 'adviser'], ['Notes', 'notes']] as const).map(([label, key]) => (
                 <div key={key} className="flex flex-col gap-1">
-                  <label className="text-xs font-medium text-gray-400">{label}</label>
-                  <input value={editForm[key]} onChange={(e) => setEditForm((p) => ({ ...p, [key]: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                  <label className="text-xs font-medium text-gray-400">{label}{key === 'phone' ? ' (include country code, or pick one)' : ''}</label>
+                  {key === 'phone' ? (
+                    <div className="flex gap-2">
+                      <select value={editForm.cc} onChange={(e) => setEditForm((p) => ({ ...p, cc: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600">{COUNTRY_CODES.map((c) => <option key={c.code} value={c.code}>{c.label}</option>)}</select>
+                      <input value={editForm.phone} onChange={(e) => setEditForm((p) => ({ ...p, phone: e.target.value }))} className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                    </div>
+                  ) : (
+                    <input value={editForm[key]} onChange={(e) => setEditForm((p) => ({ ...p, [key]: e.target.value }))} className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
+                  )}
                 </div>
               ))}
               <div className="flex flex-col gap-1">

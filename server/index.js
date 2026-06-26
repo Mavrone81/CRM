@@ -499,6 +499,18 @@ function normalisePhone(raw) {
   return digits;
 }
 
+// Canonicalise a phone for storage: digits only, leading 0/+ stripped, with the
+// chosen country code (default SG +65) prepended unless already present.
+function canonPhone(raw, cc) {
+  let d = (raw || '').replace(/\D/g, '');
+  if (!d) return '';
+  d = d.replace(/^0+/, ''); // drop trunk/leading zeros
+  const c = ((cc || '65') + '').replace(/\D/g, '') || '65';
+  if (d.startsWith(c) && d.length > 8) return d; // already has this country code
+  if (d.length === 8) return c + d;              // bare local number → prepend cc
+  return d.length >= 10 ? d : c + d;             // long number assumed to include a cc
+}
+
 function toJid(phone) {
   const normalised = normalisePhone(phone);
   if (!normalised) return null;
@@ -843,7 +855,8 @@ app.get('/api/leads', (_req, res) => {
 
 // Add new lead
 app.post('/api/leads', (req, res) => {
-  const { name, phone, email, notes, adviser, force } = req.body;
+  const { name, email, notes, adviser, force } = req.body;
+  const phone = canonPhone(req.body.phone, req.body.cc);
   if (!name || !phone) return res.status(400).json({ error: 'name and phone required' });
   const leads = readLeads();
 
@@ -884,7 +897,7 @@ app.post('/api/leads/import', (req, res) => {
   let nextId = leads.length ? Math.max(...leads.map((l) => l.id)) + 1 : 1;
   let added = 0; const skipped = [];
   for (const r of rows) {
-    const name = (r.name || '').trim(); const phone = (r.phone || '').trim();
+    const name = (r.name || '').trim(); const phone = canonPhone(r.phone, '65');
     if (!name && !phone) { skipped.push({ name, phone, reason: 'empty' }); continue; }
     const k = keyOf(name, phone);
     if (k && (exist.has(k) || seen.has(k))) { skipped.push({ name, phone, reason: 'duplicate' }); continue; }
@@ -902,6 +915,8 @@ app.patch('/api/leads/:id', (req, res) => {
   const leads = readLeads();
   const lead = leads.find((l) => l.id === Number(req.params.id));
   if (!lead) return res.status(404).json({ error: 'not found' });
+  if (typeof req.body.phone === 'string') req.body.phone = canonPhone(req.body.phone, req.body.cc);
+  delete req.body.cc;
   Object.assign(lead, req.body);
   saveLeads(leads);
   res.json(lead);
