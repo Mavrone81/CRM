@@ -16,12 +16,17 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const LEADS_PATH = join(__dirname, 'data', 'leads.json');
-const CONFIG_PATH = join(__dirname, 'data', 'config.json');
+// Data dir is env-overridable so tests can point at an isolated temp dir.
+const DATA_DIR = process.env.WATAPP_DATA_DIR || join(__dirname, 'data');
+// Under test we import this module for its exports without booting WhatsApp,
+// Telegram or the HTTP listener. Production never sets NODE_ENV=test.
+const BOOT = process.env.NODE_ENV !== 'test';
+const LEADS_PATH = join(DATA_DIR, 'leads.json');
+const CONFIG_PATH = join(DATA_DIR, 'config.json');
 const KNOWLEDGE_PATH = join(__dirname, 'knowledge.md');
-const DOCS_DIR = join(__dirname, 'data', 'documents');
-const DOCS_META_PATH = join(__dirname, 'data', 'documents.json');
-const SIGNED_DIR = join(__dirname, 'data', 'signed'); // returned signed agreements
+const DOCS_DIR = join(DATA_DIR, 'documents');
+const DOCS_META_PATH = join(DATA_DIR, 'documents.json');
+const SIGNED_DIR = join(DATA_DIR, 'signed'); // returned signed agreements
 if (!existsSync(DOCS_DIR)) mkdirSync(DOCS_DIR, { recursive: true });
 if (!existsSync(SIGNED_DIR)) mkdirSync(SIGNED_DIR, { recursive: true });
 
@@ -424,7 +429,7 @@ function evalDeliveryHealth() {
     else if (rate >= 0.2 && c.health === 'undelivered') { c.health = 'ok'; console.log(`[health] ${c.label}: deliveries recovered (${stat.delivered}/${stat.sent})`); }
   }
 }
-setInterval(evalDeliveryHealth, 3 * 60 * 1000);
+if (BOOT) setInterval(evalDeliveryHealth, 3 * 60 * 1000);
 
 // ── Recovery probe — periodically test paused/flagged numbers for un-ban ────────
 // Sends one message from the number under test to a healthy number and watches
@@ -458,8 +463,10 @@ async function recoveryProbe() {
     else console.log(`[probe] ${c.label}: offline — couldn't connect to test this round`);
   }
 }
-setInterval(recoveryProbe, 6 * 60 * 60 * 1000); // every 6 hours
-setTimeout(recoveryProbe, 2 * 60 * 1000);       // and once shortly after boot
+if (BOOT) {
+  setInterval(recoveryProbe, 6 * 60 * 60 * 1000); // every 6 hours
+  setTimeout(recoveryProbe, 2 * 60 * 1000);       // and once shortly after boot
+}
 
 // ── Per-number guardrails: daily caps + warming ─────────────────────────────────
 const DEFAULT_CAP = 40;
@@ -851,7 +858,7 @@ async function connectNumber(numId) {
 }
 
 // Connect all configured numbers on boot.
-for (const n of numbersCfg()) connectNumber(n.id).catch((e) => console.error('[wa] connect failed', n.id, e.message));
+if (BOOT) for (const n of numbersCfg()) connectNumber(n.id).catch((e) => console.error('[wa] connect failed', n.id, e.message));
 
 // ── Express ───────────────────────────────────────────────────────────────────
 const app = express();
@@ -1611,12 +1618,24 @@ async function tgPoll() {
   } catch (e) { tgState = 'error'; console.error('[tg] poll error:', e.message); }
   setTimeout(tgPoll, 500);
 }
-if (TG_TOKEN) {
+if (BOOT && TG_TOKEN) {
   tgCall('getMe').then((r) => { if (r.ok) { tgUsername = r.result.username; console.log('[tg] bot online: @' + tgUsername); } else console.log('[tg] token invalid'); });
   tgPoll();
 }
 
-ensureStatuses(); // one-time idempotent backfill of `status` on existing leads
+if (BOOT) {
+  ensureStatuses(); // one-time idempotent backfill of `status` on existing leads
+  const PORT = process.env.PORT || 10001;
+  app.listen(PORT, () => console.log(`[server] http://localhost:${PORT}`));
+}
 
-const PORT = process.env.PORT || 10001;
-app.listen(PORT, () => console.log(`[server] http://localhost:${PORT}`));
+// ── Test surface ────────────────────────────────────────────────────────────────
+// Exported for unit/integration tests (see server/test/). Importing this module
+// with NODE_ENV=test yields these without booting WhatsApp/Telegram/the listener.
+export {
+  app, conns,
+  deriveStatus, statusFromCategory, normalisePhone, canonPhone, toJid, isOptOut,
+  spin, buildMessage, senderPhoneOf, matchLead, messageText, warmCap, sentTodayFor,
+  inSendWindow, classifyKeyword, attendKeyword, readLeads, saveLeads, mutateLeads,
+  readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
+};

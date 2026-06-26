@@ -66,6 +66,18 @@ There is **no test suite** in this repo yet.
 
 Production runs as Docker Compose project `crm` on a single droplet. A **cron auto-deploy** polls `origin/main` every minute and rebuilds **only the changed service**: `web/*` → web only, `server/*` → server only (drops the WhatsApp link briefly), `*.md`/docs → no rebuild, root/compose → both. Persistent data (`leads.json`, `config.json`, `sessions/`, `.env`) is git-ignored and survives `git reset --hard`. **To ship: commit to `main` and push** — there is no PR gate. The 1-vCPU box builds slowly (~4–5 min, serialized under a flock), so batch changes.
 
+## Testing & CI
+
+Tests live in three layers; **green CI is the merge gate** for `main` (CI is advisory vs the cron deploy, which can't be blocked server-side — so don't merge a red PR).
+
+- **Server unit + integration** — Node built-in `node:test` (zero deps), under `server/test/`. `index.js` is import-safe under `NODE_ENV=test` (a `BOOT` guard skips WhatsApp/Telegram/the listener and the background timers) and its data dir is overridable via `WATAPP_DATA_DIR`. Integration tests boot the real Express `app` on an ephemeral port with **fake open sockets injected into `conns`** so sends are captured, not transmitted (see `server/test/helpers/harness.js`). The agreement test guards the `firstSock` regression; `concurrency.test.js` guards the `mutateLeads` atomic-write rule.
+  - Run: `cd server && NODE_ENV=test node --test test/unit/*.test.js test/integration/*.test.js`
+- **E2E** — Playwright (full UI) in top-level `e2e/` (own `package.json`, keeps Playwright out of prod deps). `e2e/test-server.mjs` boots the server in test mode against a temp copy of `e2e/fixtures/` with fake sockets; Playwright also runs the built web (`next start`) with test `AUTH_*` creds + `WA_SERVER_URL`.
+  - Run: `cd e2e && npm run test:full` (builds web, boots both servers, runs specs headless).
+- **CI** — `.github/workflows/ci.yml`, jobs `server` / `web-build` / `e2e` on `node:20`, triggered on PRs and pushes to `main`.
+
+When changing server logic, keep `index.js` import-safe (no new unguarded top-level side-effects/timers) and add/adjust a test.
+
 ## Recent Work & Learnings (2026-06-26)
 
 - **Agreement now sends from the lead's own number.** `sendDocumentsTo()` was hardcoded to `firstSock()` (always Number 1), so agreements went out from the wrong number and broke each rep's existing thread. Fixed (`4c1f71d`): it takes an optional socket and `/api/wf/agreement/:id` passes `sockForLead(lead)`; it now also sets canonical `status='agreement'` and records the real caption in `sentReplies`.
