@@ -1026,6 +1026,16 @@ app.patch('/api/leads/:id', (req, res) => {
   res.json(lead);
 });
 
+// Permanently remove a lead from the system (Directory "Remove" action).
+app.delete('/api/leads/:id', (req, res) => {
+  const id = Number(req.params.id);
+  let removed = null;
+  mutateLeads((ls) => { const i = ls.findIndex((l) => l.id === id); if (i !== -1) removed = ls.splice(i, 1)[0]; });
+  if (!removed) return res.status(404).json({ error: 'not found' });
+  console.log(`[lead] removed ${removed.name} (#${id})`);
+  res.json({ ok: true, removed: { id: removed.id, name: removed.name } });
+});
+
 // Bulk send — must be registered BEFORE /api/send/:id to avoid route shadowing
 const BATCH_SIZE = 40;
 const BATCH_PAUSE = 30000; // 30s between batches

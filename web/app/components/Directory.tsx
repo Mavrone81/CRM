@@ -251,7 +251,8 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                     </td>
                     <td className="px-3 sm:px-4 py-3 text-right whitespace-nowrap">
                       <button onClick={() => openEdit(l)} className="text-xs text-gray-400 hover:text-gray-200 mr-3">Edit</button>
-                      <button onClick={() => { setReplyFor(replyFor === l.id ? null : l.id); setReplyText(''); }} className="text-xs text-gray-400 hover:text-gray-200">Log reply</button>
+                      <button onClick={() => { setReplyFor(replyFor === l.id ? null : l.id); setReplyText(''); }} className="text-xs text-gray-400 hover:text-gray-200 mr-3">Log reply</button>
+                      <button onClick={async () => { if (!confirm(`Confirm remove? ${l.name} will be permanently deleted.`)) return; const r = await fetch(`${API}/leads/${l.id}`, { method: 'DELETE' }); if (r.ok) { showToast('Lead removed'); refresh(); } else showToast('Remove failed', false); }} className="text-xs text-red-500 hover:text-red-400">Remove</button>
                     </td>
                   </tr>
                   {replyFor === l.id && (
