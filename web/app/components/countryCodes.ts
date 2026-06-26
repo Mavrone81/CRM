@@ -176,3 +176,19 @@ export const COUNTRY_CODES: CC[] = [
   { code: '260', name: 'Zambia', flag: '🇿🇲' },
   { code: '263', name: 'Zimbabwe', flag: '🇿🇼' },
 ];
+
+// Country codes are a prefix-free set, so match the longest valid prefix.
+const CODE_SET = new Set(COUNTRY_CODES.map((c) => c.code));
+
+// Display a stored number as "+65 9195 5242" (country code split out, local
+// number grouped in 4s). Falls back gracefully if no code is detected.
+export function fmtPhone(raw?: string | null): string {
+  const d = (raw || '').replace(/\D/g, '');
+  if (!d) return '—';
+  // Bare 8-digit local number = Singapore (stored before a country code was added).
+  if (d.length === 8) return `+65 ${d.slice(0, 4)} ${d.slice(4)}`;
+  let cc = '';
+  for (const len of [3, 2, 1]) { if (d.length > len && CODE_SET.has(d.slice(0, len))) { cc = d.slice(0, len); break; } }
+  const local = (cc ? d.slice(cc.length) : d).replace(/(\d{4})(?=\d)/g, '$1 ');
+  return cc ? `+${cc} ${local}` : local;
+}

@@ -5,6 +5,7 @@ import type { Lead, WaStatus, Config, Session } from './types';
 import type { Status } from './status';
 import { PIPELINE_ORDER, STATUS_META } from './status';
 import { sessionDisplay, relTime, lastContactOf, lastReplyOf } from './types';
+import { fmtPhone } from './countryCodes';
 import { API, setStatus, logReply, sendReply } from './leadApi';
 
 // Tabs across the pipeline. Some statuses need a session pick to advance.
@@ -78,7 +79,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
       <div key={l.id} className="rounded-xl border border-gray-700 bg-gray-900/50 p-3 flex flex-col gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-medium text-gray-100 text-sm">{l.name}</span>
-          <span className="text-xs text-gray-500 font-mono">{l.phone}</span>
+          <span className="text-xs text-gray-500 font-mono">{fmtPhone(l.phone)}</span>
           {l.channel === 'telegram' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-950 border border-sky-800 text-sky-300">✈ TG</span>}
           {l.needsReply && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new reply</span>}
         </div>

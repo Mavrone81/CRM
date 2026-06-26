@@ -6,7 +6,7 @@ import type { Status } from './status';
 import { ALL_STATUSES, STATUS_META } from './status';
 import { relTime, lastContactOf, lastReplyOf } from './types';
 import { API, logReply, setStatus, updateLead } from './leadApi';
-import { COUNTRY_CODES } from './countryCodes';
+import { COUNTRY_CODES, fmtPhone } from './countryCodes';
 
 const GROUPS: { key: string; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -232,7 +232,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                       <div className="text-xs text-gray-500 truncate max-w-[160px] sm:max-w-none">{l.email}</div>
                     </td>
                     <td className="px-3 sm:px-4 py-3 text-xs whitespace-nowrap">
-                      <div className="text-gray-300 font-mono">{l.phone || '—'}</div>
+                      <div className="text-gray-300 font-mono">{fmtPhone(l.phone)}</div>
                       <div className="text-[10px] text-gray-500">{l.channel === 'telegram' ? '✈ Telegram' : `📱 ${numLabel(l.assignedNumber)}`}</div>
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell text-xs max-w-[240px]">
