@@ -206,7 +206,7 @@ function classifyKeyword(text) {
   return { category: 'other', confidence: 'low', reason: 'No keyword match (no API key set)', suggested_reply: '' };
 }
 
-async function classifyReplies(name, replies) {
+async function classifyReplies(name, replies, repName = '') {
   const transcript = replies.map((r) => `- ${r.text}`).join('\n');
   if (!anthropic) return classifyKeyword(replies[replies.length - 1]?.text || '');
 
@@ -224,7 +224,7 @@ ${KNOWLEDGE}
 === END KNOWLEDGE BASE ===`;
 
   const hint = STYLE_HINTS[Math.floor(Math.random() * STYLE_HINTS.length)];
-  const prompt = `Contact name: ${name}
+  const prompt = `Contact name: ${name}${repName ? `\nYou are texting as: ${repName} — introduce or sign off naturally as ${repName} when it fits (e.g. "I'm ${repName}", "— ${repName}"); don't force it into every line.` : ''}
 Their reply/replies:
 ${transcript}
 
@@ -392,6 +392,13 @@ function sockForLead(lead) {
 }
 const firstSock = () => ([...conns.values()].find((c) => c.state === 'open') || {}).sock;
 
+// The rep/agent name configured on the number a lead is assigned to — woven into
+// outbound copy so we introduce ourselves by name. '' when unset (degrades to no name).
+function repNameFor(lead) {
+  const n = numbersCfg().find((x) => x.id === lead?.assignedNumber);
+  return (n && typeof n.repName === 'string' && n.repName.trim()) || '';
+}
+
 // ── Delivery-receipt monitoring — auto-detect shadow-banned / non-delivering numbers
 // A healthy number's sends get a ✓✓ (DELIVERY_ACK). A shadow-limited number gets
 // only a server ack (✓) and never delivers. We track recent sends per number and
@@ -533,7 +540,7 @@ async function outreachTick() {
 
   try {
     const sock = conns.get(numId)?.sock;
-    const text = buildMessage(lead.name); // spintax opening — varied every send
+    const text = buildMessage(lead.name, repNameFor(lead)); // spintax opening — varied every send
     const sent = await sock.sendMessage(toJid(lead.phone), { text });
     trackSent(numId, sent?.key);
     mutateLeads((ls) => {
@@ -612,14 +619,16 @@ function toJid(phone) {
 }
 
 // Spintax outreach — every send renders a slightly different wording (anti-ban).
-const OUTREACH_SPINTAX = `{Hi|Hey|Hello|Hi there} [Name], {we connected previously|we were in touch a while back|we'd spoken before|we connected some time ago} regarding a {business/career opportunity|career opportunity|business opportunity|flexible income opportunity}, but I {recently switched to WhatsApp Business|moved over to WhatsApp Business recently|just switched to WhatsApp Business} and lost my chat history.
+const OUTREACH_SPINTAX = `{Hi|Hey|Hello|Hi there} [Name], [RepIntro]{we connected previously|we were in touch a while back|we'd spoken before|we connected some time ago} regarding a {business/career opportunity|career opportunity|business opportunity|flexible income opportunity}, but I {recently switched to WhatsApp Business|moved over to WhatsApp Business recently|just switched to WhatsApp Business} and lost my chat history.
 
 I'm {updating my records|tidying up my contacts|going through my list} and wanted to {check if|see if|ask if} you're still open to {hearing about opportunities or additional income streams|exploring opportunities or some extra income|hearing about a side-income option}.
 
 {If yes, just reply|If you are, just drop me an|Keen? Just reply} "Interested" and I'll {send you the details|share the details|fill you in}. {If not, no worries and I won't follow up further.|No worries at all if not — I won't keep messaging.|If it's not for you, all good, I won't follow up.}`;
 
-function buildMessage(name) {
-  return spin(OUTREACH_SPINTAX).replace(/\[Name\]/g, name);
+function buildMessage(name, repName = '') {
+  return spin(OUTREACH_SPINTAX)
+    .replace(/\[Name\]/g, name)
+    .replace(/\[RepIntro\]/g, repName ? `I'm ${repName} — ` : '');
 }
 
 // Extract the sender's real phone from a message's various JID fields (handles
@@ -709,7 +718,7 @@ async function connectNumber(numId) {
         const fresh = readLeads();
         const l = fresh.find((x) => x.id === id);
         if (!l?.replies?.length) continue;
-        const ai = await classifyReplies(l.name, l.replies);
+        const ai = await classifyReplies(l.name, l.replies, repNameFor(l));
         l.ai = { ...ai, classifiedAt: new Date().toISOString() };
         if (ai.category === 'interested' && !l.stage) { l.stage = 'brief'; l.wf = { ...(l.wf || {}), enteredAt: new Date().toISOString() }; }
         saveLeads(fresh);
@@ -789,7 +798,7 @@ async function connectNumber(numId) {
       // Slow AI runs OUTSIDE the write; the result is applied via mutateLeads (which
       // re-reads fresh) so concurrent replies are never clobbered.
       if (['new', 'contacted', 'question', 'review'].includes(st)) {
-        const ai = await classifyReplies(target.name, target.replies);
+        const ai = await classifyReplies(target.name, target.replies, repNameFor(target));
         mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.ai = { ...ai, classifiedAt: now() }; t.status = statusFromCategory(ai.category); } });
         console.log(`[ai] ${target.name}: ${ai.category} -> ${target.status}`);
       } else if (st === 'invited') {
@@ -868,7 +877,7 @@ app.use(express.json({ limit: '15mb' })); // base64 document uploads
 // Status + QR
 app.get('/api/status', (_req, res) => {
   const leadsForCount = readLeads();
-  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, phone: c.phone || null, health: c.health || 'ok', paused: !!n.paused, probe: c.probe || null, sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
+  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, repName: n.repName || '', state: c.state || 'close', qr: c.qr || null, phone: c.phone || null, health: c.health || 'ok', paused: !!n.paused, probe: c.probe || null, sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
   const state = anyOpen() ? 'open' : (numbers.some((n) => n.state === 'connecting') ? 'connecting' : 'close');
   const qr = (numbers.find((n) => n.state === 'connecting' && n.qr) || {}).qr || null;
   res.json({ state, qr, numbers, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername }, outreach: { running: outreach.running, queued: outreach.queue.length, sent: outreach.sent, failed: outreach.failed, windowOpen: inSendWindow() } });
@@ -889,7 +898,7 @@ app.post('/api/classify/all', async (_req, res) => {
   const pending = leads.filter((l) => l.replies?.length && !l.ai);
   let done = 0;
   for (const lead of pending) {
-    const ai = await classifyReplies(lead.name, lead.replies);
+    const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead));
     const fresh = readLeads();
     const target = fresh.find((l) => l.id === lead.id);
     target.ai = { ...ai, classifiedAt: new Date().toISOString() };
@@ -935,7 +944,7 @@ app.post('/api/classify/:id', async (req, res) => {
   if (!lead) return res.status(404).json({ error: 'not found' });
   if (!lead.replies?.length) return res.status(400).json({ error: 'no replies to classify' });
 
-  const ai = await classifyReplies(lead.name, lead.replies);
+  const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead));
   const fresh = readLeads();
   const target = fresh.find((l) => l.id === lead.id);
   target.ai = { ...ai, classifiedAt: new Date().toISOString() };
@@ -1049,7 +1058,7 @@ app.post('/api/send/bulk', async (req, res) => {
       const jid = toJid(lead.phone);
       if (!jid) { results.push({ id, ok: false, error: 'invalid phone' }); continue; }
 
-      const message = customMessage || buildMessage(lead.name);
+      const message = customMessage || buildMessage(lead.name, repNameFor(lead));
 
       try {
         await firstSock().sendMessage(jid, { text: message });
@@ -1087,7 +1096,7 @@ app.post('/api/send/:id', async (req, res) => {
   const jid = toJid(lead.phone);
   if (!jid) return res.status(400).json({ error: 'invalid phone number' });
 
-  const message = req.body.message || buildMessage(lead.name);
+  const message = req.body.message || buildMessage(lead.name, repNameFor(lead));
 
   try {
     await firstSock().sendMessage(jid, { text: message });
@@ -1119,7 +1128,7 @@ app.post('/api/logout', async (_req, res) => {
 });
 
 // ── Numbers management (multi-number) ───────────────────────────────────────────
-const numberView = (n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, state: c.state || 'close', qr: c.qr || null, phone: c.phone || null }; };
+const numberView = (n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, repName: n.repName || '', state: c.state || 'close', qr: c.qr || null, phone: c.phone || null }; };
 app.get('/api/numbers', (_req, res) => res.json(numbersCfg().map(numberView)));
 
 app.post('/api/numbers', (req, res) => {
@@ -1127,9 +1136,10 @@ app.post('/api/numbers', (req, res) => {
   if (nums.length >= 10) return res.status(400).json({ error: 'max 10 numbers' });
   const id = 'n' + Date.now().toString(36);
   const label = (req.body.label || `Number ${nums.length + 1}`).trim();
-  writeConfig({ ...readConfig(), numbers: [...nums, { id, label, addedAt: new Date().toISOString(), dailyCap: DEFAULT_CAP }] });
+  const repName = (req.body.repName || '').trim();
+  writeConfig({ ...readConfig(), numbers: [...nums, { id, label, repName, addedAt: new Date().toISOString(), dailyCap: DEFAULT_CAP }] });
   connectNumber(id).catch((e) => console.error('[wa] connect failed', id, e.message));
-  res.status(201).json({ id, label });
+  res.status(201).json({ id, label, repName });
 });
 
 app.post('/api/numbers/:id/relink', async (req, res) => {
@@ -1174,6 +1184,7 @@ app.patch('/api/numbers/:id', (req, res) => {
   if (!n) return res.status(404).json({ error: 'not found' });
   if (req.body.dailyCap != null) n.dailyCap = Math.max(1, Math.min(200, Number(req.body.dailyCap) || DEFAULT_CAP));
   if (typeof req.body.label === 'string' && req.body.label.trim()) n.label = req.body.label.trim();
+  if (typeof req.body.repName === 'string') n.repName = req.body.repName.trim(); // '' clears it
   if (typeof req.body.paused === 'boolean') n.paused = req.body.paused;
   writeConfig({ ...readConfig(), numbers: nums });
   res.json({ ok: true });
@@ -1377,7 +1388,8 @@ app.post('/api/wf/agreement/:id', async (req, res) => {
   if (!chosen.length) chosen = all.slice(0, 1);
   if (!chosen.length) return res.status(400).json({ error: 'no documents available to send' });
   try {
-    const caption = req.body.caption || `Hi ${lead.name}, here is the associate agreement. Please review, sign, and send the signed PDF back to me here.`;
+    const rep = repNameFor(lead);
+    const caption = req.body.caption || `Hi ${lead.name},${rep ? ` I'm ${rep}.` : ''} Here is the associate agreement. Please review, sign, and send the signed PDF back to me here.`;
     await sendDocumentsTo(jid, chosen, caption, sock);
     const ts = new Date().toISOString();
     lead.stage = 'agreement_sent';
@@ -1473,7 +1485,7 @@ app.post('/api/leads/:id/reply', async (req, res) => {
   const st = lead.status || deriveStatus(lead);
   if (['new', 'contacted', 'question', 'review'].includes(st) && req.body.classify !== false) {
     try {
-      const ai = await classifyReplies(lead.name, lead.replies);
+      const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead));
       const fresh = readLeads();
       const t = fresh.find((l) => l.id === lead.id);
       if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; t.status = statusFromCategory(ai.category); saveLeads(fresh); return res.json({ ok: true, lead: t }); }
@@ -1523,12 +1535,12 @@ app.post('/api/leads/:id/suggest', async (req, res) => {
   try {
     let suggested;
     if (lead.replies?.length) {
-      const ai = await classifyReplies(lead.name, lead.replies);
+      const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead));
       suggested = ai.suggested_reply;
       const f = readLeads(); const t = f.find((l) => l.id === lead.id);
       if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; saveLeads(f); }
     } else {
-      suggested = buildMessage(lead.name); // spintax opening — different every call
+      suggested = buildMessage(lead.name, repNameFor(lead)); // spintax opening — different every call
       const f = readLeads(); const t = f.find((l) => l.id === lead.id);
       if (t) { t.ai = { ...(t.ai || {}), suggested_reply: suggested, classifiedAt: new Date().toISOString() }; saveLeads(f); }
     }
@@ -1589,7 +1601,7 @@ async function processTgMessage(msg) {
   // Telegram is ban-free, so the bot CONVERSES: classify, advance status if it's
   // still in triage, and auto-reply with the humanised drafted message.
   try {
-    const ai = await classifyReplies(lead.name, lead.replies);
+    const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead));
     const f = readLeads(); const t = f.find((l) => l.id === lead.id);
     if (!t) return;
     t.ai = { ...ai, classifiedAt: new Date().toISOString() };
