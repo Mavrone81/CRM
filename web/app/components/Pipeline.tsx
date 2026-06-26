@@ -43,6 +43,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
   const [sendFor, setSendFor] = useState<number | null>(null);
   const [sendText, setSendText] = useState('');
   const [sort, setSort] = useState('contacted');
+  const [suggesting, setSuggesting] = useState<number | null>(null);
 
   const loadConfig = useCallback(async () => { try { setConfig(await (await fetch(`${API}/config`)).json()); } catch {} }, []);
   useEffect(() => { loadConfig(); }, [loadConfig]);
@@ -52,6 +53,15 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
     mark(id, true);
     try { const { ok, data } = await fn(); if (ok && data.ok !== false) { showToast(msg); refresh(); } else showToast(data.error || 'Failed', false); }
     catch { showToast('Network error', false); } finally { mark(id, false); }
+  };
+  const suggest = async (id: number) => {
+    setSuggesting(id);
+    try {
+      const r = await fetch(`${API}/leads/${id}/suggest`, { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.suggested_reply) { showToast('Regenerated'); refresh(); }
+      else showToast(d.error || 'Could not regenerate', false);
+    } catch { showToast('Network error', false); } finally { setSuggesting(null); }
   };
 
   const byStatus: Record<string, Lead[]> = {};
@@ -89,14 +99,17 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
           {lastReplyOf(l) && <span>Replied: <span className="text-gray-400">{relTime(lastReplyOf(l))}</span></span>}
         </div>
 
-        {/* AI-recommended reply / invite — click Send to send it via the lead's number (WhatsApp or Telegram), or Copy */}
-        {l.ai?.suggested_reply && (
+        {/* AI-recommended reply / invite — Regenerate (✨), Send (via the lead's number), or Copy */}
+        {l.ai?.suggested_reply ? (
           <div className="text-xs bg-gray-950/60 border border-gray-800 rounded-lg p-2 flex items-start gap-2">
             <span className="text-purple-300 whitespace-nowrap">Suggested:</span>
             <span className="text-gray-300 flex-1">{l.ai.suggested_reply}</span>
+            <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} title="Regenerate" className="text-purple-300 hover:text-purple-200 whitespace-nowrap">{suggesting === l.id ? '…' : '✨'}</button>
             <button onClick={() => act(l.id, () => sendReply(l.id, l.ai!.suggested_reply), `Sent to ${l.name}`)} disabled={b} className="text-green-400 hover:text-green-300 whitespace-nowrap font-medium">Send</button>
             <button onClick={() => { navigator.clipboard.writeText(l.ai!.suggested_reply); showToast('Copied'); }} className="text-gray-400 hover:text-gray-200 whitespace-nowrap">Copy</button>
           </div>
+        ) : (
+          <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} className="self-start text-xs text-purple-300 hover:text-purple-200 border border-purple-900/50 rounded-lg px-2.5 py-1 disabled:opacity-50">{suggesting === l.id ? 'Generating…' : '✨ Suggest a reply'}</button>
         )}
 
         {/* Agreement: show signed-validation result */}
