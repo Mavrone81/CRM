@@ -210,9 +210,21 @@ async function classifyReplies(name, replies, repName = '') {
   const transcript = replies.map((r) => `- ${r.text}`).join('\n');
   if (!anthropic) return classifyKeyword(replies[replies.length - 1]?.text || '');
 
+  const cfg = readConfig();
+  const briefing = fmtSessions(cfg.sessions);
+  const onboarding = fmtSessions(cfg.onboardingSessions);
+
   const system = `You are the WhatsApp assistant for a Pet Afterlife SG recruitment outreach. We message contacts asking if they're open to a flexible-income opportunity and to reply "Interested".
 
-Your job: classify each contact's reply, and draft a SHORT reply we can send back — grounded ONLY in the knowledge base below. Never invent prices, commission rates, dates, or commitments. If they're interested or asking to learn more, invite them to a briefing session (Thursday 7:30pm or Sunday 2pm) and ask which suits them.
+Your job: classify each contact's reply, and draft a SHORT reply we can send back — grounded ONLY in the knowledge base below. Never invent prices, commission rates, dates, or commitments. If they're interested or asking to learn more, invite them to one of the upcoming BRIEFING sessions below (the first session — held face to face) and ask which works best. When you mention timing, give the real scheduled dates/times — never guess or offer dates not listed.
+
+=== UPCOMING SESSIONS (offer ONLY these exact dates/times — do not invent others) ===
+BRIEFING (1st session, face-to-face) — offer these to anyone newly interested or wanting to learn more:
+${briefing || '(none scheduled yet — say a date will be confirmed shortly and ask what timing generally suits)'}
+
+ONBOARDING (2nd session) — offer these ONLY to someone who has already attended a briefing AND completed/returned their signed agreement:
+${onboarding || '(none scheduled yet)'}
+=== END SESSIONS ===
 
 VOICE — write the reply like a REAL person texting, never a template:
 - Vary your wording EVERY time. Never reuse stock openers ("Great!", "Awesome!") or the same sentence structures. Two replies to two different people must never read alike.
@@ -276,7 +288,10 @@ async function classifyAttendance(name, replies) {
   if (!anthropic) return attendKeyword(last);
 
   const transcript = replies.map((r) => `- ${r.text}`).join('\n');
-  const system = `You manage attendance for a recruitment briefing. Invited contacts were asked to confirm whether they'll attend a session (Thursday 7:30pm or Sunday 2pm). Read the contact's replies and decide if they have CONFIRMED they'll attend, DECLINED, or it's still UNCLEAR. Note any session/timing preference in your reason.`;
+  const briefing = fmtSessions(readConfig().sessions);
+  const system = `You manage attendance for a recruitment briefing. Invited contacts were asked to confirm whether they'll attend one of these upcoming briefing sessions:
+${briefing || '(dates being finalised)'}
+Read the contact's replies and decide if they have CONFIRMED they'll attend, DECLINED, or it's still UNCLEAR. Note which session/date they preferred (if any) in your reason.`;
   const prompt = `Contact name: ${name}
 Their replies (most recent last):
 ${transcript}
@@ -302,6 +317,37 @@ Classify their attendance.`;
 // ── Session list formatting (for the auto onboarding offer) ──────────────────────
 function fmtSessionList(sessions) {
   return (sessions || []).map((s) => `• ${s.label}${s.date ? ` · ${s.date}` : ''}`).join('\n');
+}
+
+// ── Upcoming-session schedule (fed to the bot so it offers only real, future dates)
+const _MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const _DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// Today's date (YYYY-MM-DD) in Singapore time — sessions are planned/attended in SGT.
+function todaySG() { return new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10); }
+// Human display for one session, mirroring the web's sessionDisplay: weekday + 12h
+// time from date/time fields, falling back to the legacy `label`.
+function sessionDisplaySrv(s) {
+  let weekday = '', dm = '', time12 = '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s.date || '')) {
+    weekday = _DOW[new Date(s.date + 'T12:00:00Z').getUTCDay()];
+    dm = `${Number(s.date.slice(8, 10))} ${_MONTHS[Number(s.date.slice(5, 7)) - 1]}`;
+  }
+  if (/^\d{1,2}:\d{2}$/.test(s.time || '')) {
+    let [h, m] = s.time.split(':').map(Number); const ap = h >= 12 ? 'pm' : 'am'; h = h % 12 || 12;
+    time12 = `${h}${m ? ':' + String(m).padStart(2, '0') : ''}${ap}`;
+  }
+  const main = [weekday, time12].filter(Boolean).join(' ');
+  if (!main) return s.label || '';
+  return dm ? `${main} · ${dm}` : main;
+}
+// Sessions on/after today, soonest first. Undated sessions count as always-available.
+function upcomingSessions(list) {
+  const today = todaySG();
+  return (list || []).filter((s) => !s.date || s.date >= today).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+}
+// Bullet list of the upcoming sessions for a prompt; '' when none are scheduled.
+function fmtSessions(list) {
+  return upcomingSessions(list).map((s) => sessionDisplaySrv(s)).filter(Boolean).map((d) => `• ${d}`).join('\n');
 }
 
 // ── Signed-agreement validator (Claude reads the PDF) ────────────────────────────
@@ -1177,14 +1223,20 @@ app.post('/api/numbers/distribute', (req, res) => {
   if (!nums.length) return res.status(400).json({ error: 'no numbers configured' });
 
   const CLOSED = ['declined', 'opted_out', 'onboarded'];
+  const validIds = new Set(cfgNums.map((n) => n.id));
   const leads = readLeads();
-  const eligible = leads.filter((l) => l.channel !== 'telegram' && !CLOSED.includes(l.status || 'new'));
+  const active = leads.filter((l) => l.channel !== 'telegram' && !CLOSED.includes(l.status || 'new'));
+  // Sticky agents: NEVER move a lead already tagged to a real number/agent. Only
+  // assign leads that are unassigned or orphaned (pointing at a number that no
+  // longer exists). The rep stays with the lead even if numbers are added/removed.
+  const eligible = active.filter((l) => !l.assignedNumber || !validIds.has(l.assignedNumber));
+  const kept = active.length - eligible.length;
   for (let i = eligible.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [eligible[i], eligible[j]] = [eligible[j], eligible[i]]; } // shuffle
   const counts = {};
   eligible.forEach((l, i) => { const id = nums[i % nums.length].id; l.assignedNumber = id; counts[id] = (counts[id] || 0) + 1; });
   saveLeads(leads);
-  console.log(`[distribute] ${eligible.length} leads across ${nums.length} number(s)`);
-  res.json({ ok: true, total: eligible.length, numbers: nums.map((n) => ({ id: n.id, label: n.label, count: counts[n.id] || 0 })) });
+  console.log(`[distribute] assigned ${eligible.length} unassigned lead(s) across ${nums.length} number(s); kept ${kept} already tagged`);
+  res.json({ ok: true, total: eligible.length, kept, numbers: nums.map((n) => ({ id: n.id, label: n.label, count: counts[n.id] || 0 })) });
 });
 
 // Set a number's daily cap (warming still applies on top for new numbers).
@@ -1660,4 +1712,5 @@ export {
   spin, buildMessage, senderPhoneOf, matchLead, messageText, warmCap, sentTodayFor,
   inSendWindow, classifyKeyword, attendKeyword, readLeads, saveLeads, mutateLeads,
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
+  upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
 };

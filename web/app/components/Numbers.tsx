@@ -46,12 +46,12 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
   };
   const stopOutreach = async () => { const r = await fetch(`${API}/outreach/stop`, { method: 'POST' }); const d = await r.json().catch(() => ({})); showToast(`Stopped — ${d.cleared || 0} unsent`); refresh(); };
   const distribute = async () => {
-    if (!confirm('Evenly assign every lead that still needs contacting across the connected numbers? This sets each lead’s WhatsApp number.')) return;
+    if (!confirm('Assign only the UNASSIGNED leads evenly across the connected numbers? Leads already tagged to an agent keep their agent (sticky) — they are never moved.')) return;
     setBusy(true);
     try {
       const r = await fetch(`${API}/numbers/distribute`, { method: 'POST' });
       const d = await r.json().catch(() => ({}));
-      if (r.ok) { showToast(`Distributed ${d.total} leads — ${(d.numbers || []).map((n: { label: string; count: number }) => `${n.label}: ${n.count}`).join(', ')}`); refresh(); }
+      if (r.ok) { showToast(`Assigned ${d.total} unassigned${d.kept ? `, kept ${d.kept} tagged` : ''} — ${(d.numbers || []).map((n: { label: string; count: number }) => `${n.label}: ${n.count}`).join(', ')}`); refresh(); }
       else showToast(d.error || 'Failed', false);
     } catch { showToast('Network error', false); } finally { setBusy(false); }
   };
