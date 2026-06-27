@@ -207,7 +207,13 @@ function classifyKeyword(text) {
   return { category: 'other', confidence: 'low', reason: 'No keyword match (no API key set)', suggested_reply: '' };
 }
 
-async function classifyReplies(name, replies, repName = '', bookUrl = '') {
+// True when we're about to reply from a DIFFERENT number than the lead's prior
+// conversation (a rep takeover) — so the suggested reply should introduce the new rep.
+function isNewRepTakeover(lead) {
+  const vias = new Set((lead?.sentReplies || []).map((r) => r.via).filter(Boolean));
+  return vias.size > 0 && !!lead?.assignedNumber && !vias.has(lead.assignedNumber);
+}
+async function classifyReplies(name, replies, repName = '', bookUrl = '', newRep = false) {
   const transcript = replies.map((r) => `- ${r.text}`).join('\n');
   if (!anthropic) return classifyKeyword(replies[replies.length - 1]?.text || '');
 
@@ -237,7 +243,7 @@ ${KNOWLEDGE}
 === END KNOWLEDGE BASE ===`;
 
   const hint = STYLE_HINTS[Math.floor(Math.random() * STYLE_HINTS.length)];
-  const prompt = `Contact name: ${name}${repName ? `\nYou are texting as: ${repName} — introduce or sign off naturally as ${repName} when it fits (e.g. "I'm ${repName}", "— ${repName}"); don't force it into every line.` : ''}
+  const prompt = `Contact name: ${name}${repName ? `\nYou are texting as: ${repName} — introduce or sign off naturally as ${repName} when it fits (e.g. "I'm ${repName}", "— ${repName}"); don't force it into every line.` : ''}${newRep && repName ? `\nIMPORTANT — FIRST CONTACT FROM A NEW NUMBER: This is your first message to them as ${repName}; you're taking over their conversation from a colleague. OPEN by briefly introducing yourself as ${repName} and that you'll be looking after them from here (a quick, warm one-liner), THEN respond to their message. Don't over-apologise.` : ''}
 Their reply/replies:
 ${transcript}
 
@@ -859,6 +865,31 @@ function applyHistoryMessage(leads, msg, via, lidMap) {
   return lead.id;
 }
 
+// Record one of OUR live phone-sent messages (fromMe via the linked device) onto
+// the lead's sentReplies, so a reply a rep types on their own phone shows in the
+// app. Deduped by id AND text-near-time (so it doesn't double a bot /send that
+// records id-less). Mutates `leads`; returns the lead id or null. Unit-tested.
+function applyOwnSend(leads, msg, via) {
+  if (!msg?.message) return null;
+  const text = messageText(msg);
+  if (!text || text === '[media]' || text.startsWith('[document:')) return null; // text replies only
+  const jids = [msg.key?.remoteJid, msg.key?.remoteJidAlt, msg.key?.senderPn].filter(Boolean);
+  const phoneJid = jids.find((j) => j.includes('@s.whatsapp.net'));
+  const phone = (phoneJid || '').replace('@s.whatsapp.net', '');
+  if (!phone) return null; // @lid-only recipient with no phone — can't match live
+  const lead = matchLead(leads, phone);
+  if (!lead) return null;
+  const id = msg.key?.id || null;
+  lead.sentReplies = lead.sentReplies || [];
+  const now = Date.now();
+  const dup = (id && lead.sentReplies.some((r) => r.id === id)) ||
+    lead.sentReplies.some((r) => r.text === text && Math.abs(new Date(r.timestamp || 0).getTime() - now) < 120000);
+  if (dup) return null;
+  lead.sentReplies.push({ id, text, timestamp: new Date().toISOString(), channel: 'whatsapp', via });
+  lead.needsReply = false; // we just replied
+  return lead.id;
+}
+
 // ── WhatsApp ──────────────────────────────────────────────────────────────────
 async function connectNumber(numId) {
   const label = (numbersCfg().find((n) => n.id === numId) || {}).label || numId;
@@ -927,7 +958,7 @@ async function connectNumber(numId) {
         const l = fresh.find((x) => x.id === id);
         if (!l || !l.replies?.length) continue;
         if (!['new', 'contacted'].includes(l.status || 'new')) continue;
-        const ai = await classifyReplies(l.name, l.replies, repNameFor(l), bookingUrl(l.id));
+        const ai = await classifyReplies(l.name, l.replies, repNameFor(l), bookingUrl(l.id), isNewRepTakeover(l));
         mutateLeads((ls) => { const t = ls.find((x) => x.id === id); if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; t.status = statusFromCategory(ai.category); } });
         console.log(`[backfill] #${id} ${l.name}: ${ai.category} -> ${statusFromCategory(ai.category)}`);
       } catch (e) { console.error('[backfill] classify failed for', id, e.message); }
@@ -943,7 +974,10 @@ async function connectNumber(numId) {
     for (const m of messages) rememberMessage(m); // store ALL (incl. our sent) for retries
     if (type !== 'notify') return;
     for (const msg of messages) {
-      if (msg.key.fromMe || !msg.message) continue;
+      if (!msg.message) continue;
+      // Our own message sent from the rep's phone → record it so the app's thread
+      // mirrors what reps send manually, then stop (don't classify our own text).
+      if (msg.key.fromMe) { mutateLeads((ls) => applyOwnSend(ls, msg, numId)); continue; }
 
       // WhatsApp Business / privacy routes senders via @lid identifiers, not
       // phone@s.whatsapp.net. Collect every JID the message exposes and pull
@@ -1005,7 +1039,7 @@ async function connectNumber(numId) {
       // Slow AI runs OUTSIDE the write; the result is applied via mutateLeads (which
       // re-reads fresh) so concurrent replies are never clobbered.
       if (['new', 'contacted', 'question', 'review'].includes(st)) {
-        const ai = await classifyReplies(target.name, target.replies, repNameFor(target), bookingUrl(target.id));
+        const ai = await classifyReplies(target.name, target.replies, repNameFor(target), bookingUrl(target.id), isNewRepTakeover(target));
         mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.ai = { ...ai, classifiedAt: now() }; t.status = statusFromCategory(ai.category); } });
         console.log(`[ai] ${target.name}: ${ai.category} -> ${target.status}`);
       } else if (st === 'invited') {
@@ -1105,7 +1139,7 @@ app.post('/api/classify/all', async (_req, res) => {
   const pending = leads.filter((l) => l.replies?.length && !l.ai);
   let done = 0;
   for (const lead of pending) {
-    const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead), bookingUrl(lead.id));
+    const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead), bookingUrl(lead.id), isNewRepTakeover(lead));
     const fresh = readLeads();
     const target = fresh.find((l) => l.id === lead.id);
     target.ai = { ...ai, classifiedAt: new Date().toISOString() };
@@ -1925,5 +1959,5 @@ export {
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
   bookingToken, verifyBookingToken, bookingUrl, bookingKind, bookingSlots,
-  applyHistoryMessage, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
+  applyHistoryMessage, applyOwnSend, isNewRepTakeover, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
 };

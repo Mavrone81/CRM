@@ -65,6 +65,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
   const arrow = (key: string) => (sort.key === key ? (sort.dir === 1 ? ' ▲' : ' ▼') : '');
   const [replyFor, setReplyFor] = useState<number | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [convoFor, setConvoFor] = useState<number | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', notes: '', adviser: '', cc: '65' });
   const [saving, setSaving] = useState(false);
@@ -250,6 +251,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                       </select>
                     </td>
                     <td className="px-3 sm:px-4 py-3 text-right whitespace-nowrap">
+                      <button onClick={() => setConvoFor(convoFor === l.id ? null : l.id)} className="text-xs text-gray-400 hover:text-gray-200 mr-3">{convoFor === l.id ? '▾ Chat' : '▸ Chat'}</button>
                       <button onClick={() => openEdit(l)} className="text-xs text-gray-400 hover:text-gray-200 mr-3">Edit</button>
                       <button onClick={() => { setReplyFor(replyFor === l.id ? null : l.id); setReplyText(''); }} className="text-xs text-gray-400 hover:text-gray-200 mr-3">Log reply</button>
                       <button onClick={async () => { if (!confirm(`Confirm remove? ${l.name} will be permanently deleted.`)) return; const r = await fetch(`${API}/leads/${l.id}`, { method: 'DELETE' }); if (r.ok) { showToast('Lead removed'); refresh(); } else showToast('Remove failed', false); }} className="text-xs text-red-500 hover:text-red-400">Remove</button>
@@ -261,6 +263,27 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                         <input value={replyText} onChange={(e) => setReplyText(e.target.value)} placeholder={`What ${l.name} said…`} autoFocus className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-green-600" />
                         <button onClick={async () => { if (!replyText.trim()) return; const { ok } = await logReply(l.id, replyText.trim()); if (ok) { showToast('Reply logged + classified'); setReplyFor(null); refresh(); } }} className="bg-blue-700 hover:bg-blue-600 text-white text-sm px-3 py-2 rounded-lg">Save</button>
                       </div>
+                    </td></tr>
+                  )}
+                  {convoFor === l.id && (
+                    <tr className="bg-gray-950/60"><td colSpan={7} className="px-3 sm:px-4 py-3">
+                      {(() => {
+                        const thread = [
+                          ...(l.replies || []).map((r) => ({ text: r.text, ts: r.timestamp, dir: 'in' as const, via: (r as { via?: string }).via })),
+                          ...(l.sentReplies || []).map((r) => ({ text: r.text, ts: r.timestamp, dir: 'out' as const, via: (r as { via?: string }).via })),
+                        ].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+                        if (!thread.length) return <div className="text-xs text-gray-600">No messages yet.</div>;
+                        return (
+                          <div className="flex flex-col gap-1.5 max-h-80 overflow-auto">
+                            {thread.map((m, i) => (
+                              <div key={i} className={`max-w-[85%] break-words [overflow-wrap:anywhere] rounded-2xl px-3 py-1.5 text-sm ${m.dir === 'out' ? 'self-end bg-green-900/40 text-green-50 rounded-br-sm' : 'self-start bg-gray-800 text-gray-200 rounded-bl-sm'}`}>
+                                {m.text}
+                                <span className="block text-[10px] text-gray-500 mt-0.5">{m.dir === 'out' ? 'agent' : l.name}{m.via ? ` · ${numLabel(m.via)}` : ''} · {relTime(m.ts)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </td></tr>
                   )}
                 </React.Fragment>
