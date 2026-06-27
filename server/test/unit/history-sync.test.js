@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { applyHistoryMessage } from '../../index.js';
+import { applyHistoryMessage, buildLidMap } from '../../index.js';
 
 const mk = (over) => ({ key: { remoteJid: '6591234567@s.whatsapp.net', id: 'm1', fromMe: false }, message: { conversation: 'hello' }, messageTimestamp: 1719500000, ...over });
 
@@ -52,4 +52,14 @@ test('skips unmatched numbers and contentless media', () => {
   assert.equal(applyHistoryMessage(leads, mk()), null, 'no matching lead');
   const leads2 = [{ id: 1, name: 'A', phone: '6591234567' }];
   assert.equal(applyHistoryMessage(leads2, mk({ message: { imageMessage: {} } })), null, 'bare media skipped');
+});
+
+test('resolves @lid messages to a lead via the contacts lid->phone map', () => {
+  const contacts = [{ id: '6591234567@s.whatsapp.net', lid: '136683659997435@lid' }];
+  const lidMap = buildLidMap(contacts);
+  assert.equal(lidMap['136683659997435@lid'], '6591234567');
+  const leads = [{ id: 1, name: 'A', phone: '6591234567' }];
+  const msg = { key: { remoteJid: '136683659997435@lid', id: 'lidmsg', fromMe: true }, message: { conversation: 'hey via lid' }, messageTimestamp: 1719500000 };
+  assert.equal(applyHistoryMessage(leads, msg, 'n2', lidMap), 1, 'matched via lid map');
+  assert.equal(leads[0].sentReplies[0].text, 'hey via lid');
 });

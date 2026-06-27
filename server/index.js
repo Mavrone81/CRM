@@ -742,8 +742,26 @@ function messageText(msg) {
 // it handles @lid privacy routing (remoteJid is a long LID; the real phone is in
 // remoteJidAlt/senderPn). Must NOT use raw remoteJid digits: a @lid looks like a
 // 15–18 digit "number" and would match no lead.
-function chatPhone(msg) {
-  return senderPhoneOf(msg);
+function chatPhone(msg, lidMap) {
+  const p = senderPhoneOf(msg);
+  if (p) return p;
+  // @lid privacy: the message carries no phone — resolve the LID via the
+  // contacts mapping delivered with the history (lid jid -> phone digits).
+  const jid = msg?.key?.remoteJid || '';
+  if (jid.endsWith('@lid') && lidMap && lidMap[jid]) return lidMap[jid];
+  return '';
+}
+// Build a {@lid jid -> phone digits} map from a history event's contacts array
+// (Contact has both `id` and `lid`; the phone is whichever is @s.whatsapp.net).
+function buildLidMap(contacts) {
+  const map = {};
+  for (const c of contacts || []) {
+    const a = c.id || '', b = c.lid || '';
+    const lid = a.endsWith('@lid') ? a : (b.endsWith('@lid') ? b : '');
+    const pn = a.endsWith('@s.whatsapp.net') ? a : (b.endsWith('@s.whatsapp.net') ? b : '');
+    if (lid && pn) map[lid] = pn.split('@')[0].split(':')[0];
+  }
+  return map;
 }
 
 // Record ONE history message onto the matching lead (both directions: our sent →
@@ -754,9 +772,9 @@ function chatPhone(msg) {
 // have no id, by same-text-within-2min — so genuinely different cross-rep messages
 // (same text, different time) are KEPT, not dropped. `via` = source number id.
 // Mutates `leads` in place; returns the touched lead id, or null. Unit-tested.
-function applyHistoryMessage(leads, msg, via) {
+function applyHistoryMessage(leads, msg, via, lidMap) {
   if (!msg?.message) return null;
-  const lead = matchLead(leads, chatPhone(msg));
+  const lead = matchLead(leads, chatPhone(msg, lidMap));
   if (!lead) return null;
   const text = messageText(msg);
   if (!text || text === '[media]') return null; // skip contentless media
@@ -804,23 +822,24 @@ async function connectNumber(numId) {
 
   // Backfill: when WhatsApp syncs chat history (e.g. after re-linking the number),
   // capture any lead replies that arrived while the bot was offline, then classify.
-  sock.ev.on('messaging-history.set', async ({ messages, syncType, progress }) => {
+  sock.ev.on('messaging-history.set', async ({ messages, contacts, syncType, progress }) => {
     if (!messages?.length) return;
+    const lidMap = buildLidMap(contacts); // @lid -> phone, from the synced contacts
     // DIAGNOSTIC: why do some numbers match 0 leads? Log counts + unmatched numbers.
     try {
       const _l = readLeads();
       let _me = 0, _hit = 0; const _miss = new Set();
       for (const m of messages) {
         if (m.key?.fromMe) _me++;
-        const p = chatPhone(m);
+        const p = chatPhone(m, lidMap);
         if (p && matchLead(_l, p)) _hit++; else _miss.add(p || '(no#)');
       }
-      console.log(`[history:${numId}] ${messages.length} msgs syncType=${syncType} progress=${progress} fromMe=${_me} matched=${_hit} unmatched=[${[..._miss].slice(0, 25).join(',')}]`);
+      console.log(`[history:${numId}] ${messages.length} msgs syncType=${syncType} progress=${progress} contacts=${contacts?.length || 0} lidMap=${Object.keys(lidMap).length} fromMe=${_me} matched=${_hit} unmatched=[${[..._miss].slice(0, 20).join(',')}]`);
     } catch (e) { console.error('[history] diag failed', e.message); }
     const touched = new Set();
     mutateLeads((leads) => {
       for (const msg of messages) {
-        const id = applyHistoryMessage(leads, msg, numId); // records BOTH directions, deduped, tagged with source number
+        const id = applyHistoryMessage(leads, msg, numId, lidMap); // records BOTH directions, deduped, tagged; resolves @lid via contacts
         if (id != null) touched.add(id);
       }
       for (const id of touched) {
@@ -1837,5 +1856,5 @@ export {
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
   bookingToken, verifyBookingToken, bookingUrl, bookingKind, bookingSlots,
-  applyHistoryMessage, chatPhone,
+  applyHistoryMessage, chatPhone, buildLidMap,
 };
