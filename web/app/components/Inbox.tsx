@@ -72,7 +72,7 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
               {thread.length > 0 && (
                 <div className="flex flex-col gap-1.5 max-h-64 overflow-auto py-1">
                   {thread.map((m, i) => (
-                    <div key={i} className={`max-w-[85%] rounded-2xl px-3 py-1.5 text-sm ${m.dir === 'out' ? 'self-end bg-green-900/40 text-green-50 rounded-br-sm' : 'self-start bg-gray-800 text-gray-200 rounded-bl-sm'}`}>
+                    <div key={i} className={`max-w-[85%] break-words [overflow-wrap:anywhere] rounded-2xl px-3 py-1.5 text-sm ${m.dir === 'out' ? 'self-end bg-green-900/40 text-green-50 rounded-br-sm' : 'self-start bg-gray-800 text-gray-200 rounded-bl-sm'}`}>
                       {m.text}
                       <span className="block text-[10px] text-gray-500 mt-0.5">{m.dir === 'out' ? (m.auto ? 'sent · bot' : 'you') : 'them'} · {relTime(m.ts)}</span>
                     </div>

@@ -103,7 +103,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
         {l.ai?.suggested_reply ? (
           <div className="text-xs bg-gray-950/60 border border-gray-800 rounded-lg p-2 flex items-start gap-2">
             <span className="text-purple-300 whitespace-nowrap">Suggested:</span>
-            <span className="text-gray-300 flex-1">{l.ai.suggested_reply}</span>
+            <span className="text-gray-300 flex-1 min-w-0 break-words [overflow-wrap:anywhere]">{l.ai.suggested_reply}</span>
             <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} title="Regenerate" className="text-purple-300 hover:text-purple-200 whitespace-nowrap">{suggesting === l.id ? '…' : '✨'}</button>
             <button onClick={() => act(l.id, () => sendReply(l.id, l.ai!.suggested_reply), `Sent to ${l.name}`)} disabled={b} className="text-green-400 hover:text-green-300 whitespace-nowrap font-medium">Send</button>
             <button onClick={() => { navigator.clipboard.writeText(l.ai!.suggested_reply); showToast('Copied'); }} className="text-gray-400 hover:text-gray-200 whitespace-nowrap">Copy</button>
