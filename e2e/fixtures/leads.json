@@ -257,5 +257,27 @@
       }
     ],
     "status": "attended"
+  },
+  {
+    "id": 31,
+    "name": "Nora NewReply",
+    "phone": "6512340031",
+    "email": "",
+    "notes": "",
+    "adviser": "",
+    "created": "2026-06-01T00:00:00.000Z",
+    "sent": true,
+    "sentAt": "2026-06-27T01:00:00.000Z",
+    "contactedAt": "2026-06-27T01:00:00.000Z",
+    "channel": "whatsapp",
+    "assignedNumber": "n1",
+    "status": "interested",
+    "needsReply": true,
+    "replies": [
+      {
+        "text": "yes I am interested!",
+        "timestamp": "2026-06-27T02:00:00.000Z"
+      }
+    ]
   }
 ]

@@ -12,8 +12,8 @@ test.describe('pipeline — suggested reply (Send / Regenerate / Suggest)', () =
     const card = page.locator('div.rounded-xl', { hasText: 'Ivy Suggested' });
     await expect(card).toBeVisible();
 
-    // Suggested-reply block shows ✨ (Regenerate), Send and Copy.
-    const regen = card.locator('button[title="Regenerate"]');
+    // Suggested-reply block shows ✨ Regenerate, Send and Copy.
+    const regen = card.getByRole('button', { name: /Regenerate/ });
     const send = card.getByRole('button', { name: 'Send', exact: true });
     await expect(regen).toBeVisible();
     await expect(send).toBeVisible();
