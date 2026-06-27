@@ -742,13 +742,19 @@ function messageText(msg) {
 // it handles @lid privacy routing (remoteJid is a long LID; the real phone is in
 // remoteJidAlt/senderPn). Must NOT use raw remoteJid digits: a @lid looks like a
 // 15–18 digit "number" and would match no lead.
+// Normalise an @lid jid: drop any device suffix (":N") so keys line up.
+function normLid(v) {
+  let s = String(v || '');
+  if (!s) return '';
+  if (!s.includes('@')) s += '@lid';
+  return s.replace(/:\d+@/, '@');
+}
 function chatPhone(msg, lidMap) {
   const p = senderPhoneOf(msg);
   if (p) return p;
-  // @lid privacy: the message carries no phone — resolve the LID via the
-  // contacts mapping delivered with the history (lid jid -> phone digits).
+  // @lid privacy: the message carries no phone — resolve the LID via the map.
   const jid = msg?.key?.remoteJid || '';
-  if (jid.endsWith('@lid') && lidMap && lidMap[jid]) return lidMap[jid];
+  if (jid.endsWith('@lid') && lidMap) return lidMap[normLid(jid)] || '';
   return '';
 }
 // Build a {@lid jid -> phone digits} map from a history event's contacts array
@@ -759,9 +765,30 @@ function buildLidMap(contacts) {
     const a = c.id || '', b = c.lid || '';
     const lid = a.endsWith('@lid') ? a : (b.endsWith('@lid') ? b : '');
     const pn = a.endsWith('@s.whatsapp.net') ? a : (b.endsWith('@s.whatsapp.net') ? b : '');
-    if (lid && pn) map[lid] = pn.split('@')[0].split(':')[0];
+    if (lid && pn) map[normLid(lid)] = pn.split('@')[0].split(':')[0];
   }
   return map;
+}
+// Reverse map: ask WhatsApp (onWhatsApp) for each lead's LID, building {@lid -> phone}.
+// Cached ~1h. This is how we recover @lid-only history (no phone in the messages).
+let _leadLid = { at: 0, map: {} };
+async function leadLidMap(sock) {
+  if (Date.now() - _leadLid.at < 3600000 && Object.keys(_leadLid.map).length) return _leadLid.map;
+  const jids = [...new Set(readLeads().map((l) => toJid(l.phone)).filter(Boolean))];
+  const map = {};
+  for (let i = 0; i < jids.length; i += 50) {
+    try {
+      const res = await sock.onWhatsApp(...jids.slice(i, i + 50));
+      for (const r of res || []) {
+        const lid = normLid(r?.lid);
+        const pn = r?.jid ? String(r.jid).split('@')[0].split(':')[0] : '';
+        if (lid.endsWith('@lid') && pn) map[lid] = pn;
+      }
+    } catch (e) { console.error('[lidmap] onWhatsApp batch failed:', e.message); }
+  }
+  _leadLid = { at: Date.now(), map };
+  console.log(`[lidmap] lead lid->phone map: ${Object.keys(map).length} entries from ${jids.length} leads`);
+  return _leadLid.map;
 }
 
 // Record ONE history message onto the matching lead (both directions: our sent →
@@ -824,7 +851,12 @@ async function connectNumber(numId) {
   // capture any lead replies that arrived while the bot was offline, then classify.
   sock.ev.on('messaging-history.set', async ({ messages, contacts, syncType, progress }) => {
     if (!messages?.length) return;
-    const lidMap = buildLidMap(contacts); // @lid -> phone, from the synced contacts
+    let lidMap = buildLidMap(contacts); // @lid -> phone, from the synced contacts
+    // If the synced contacts don't carry the mapping but there ARE @lid chats,
+    // recover it by asking WhatsApp for our leads' LIDs (reverse lookup).
+    if (Object.keys(lidMap).length === 0 && messages.some((m) => (m.key?.remoteJid || '').endsWith('@lid'))) {
+      try { lidMap = await leadLidMap(sock); } catch (e) { console.error('[lidmap] failed:', e.message); }
+    }
     // DIAGNOSTIC: why do some numbers match 0 leads? Log counts + unmatched numbers.
     try {
       const _l = readLeads();
