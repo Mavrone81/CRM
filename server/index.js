@@ -14,9 +14,37 @@ import Anthropic from '@anthropic-ai/sdk';
 import { readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { createHmac } from 'crypto';
+import { createHmac, createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── App-level encryption at rest ───────────────────────────────────────────────
+// When DATA_KEY (64 hex chars = 32 bytes) is set, all JSON data files are stored
+// AES-256-GCM encrypted on disk and transparently decrypted on read. Without it,
+// files stay plain JSON (dev/test). Files are tagged with an ENC1: prefix so reads
+// auto-detect plaintext (pre-migration) vs ciphertext — making migration seamless.
+// ⚠️ If DATA_KEY is lost, encrypted data is UNRECOVERABLE — back it up.
+const DATA_KEY = (() => {
+  const k = process.env.DATA_KEY;
+  if (!k) return null;
+  try { const b = Buffer.from(k, 'hex'); return b.length === 32 ? b : null; } catch { return null; }
+})();
+const ENC_PREFIX = 'ENC1:';
+function encStr(plain) {
+  if (!DATA_KEY) return plain; // plaintext mode
+  const iv = randomBytes(12);
+  const c = createCipheriv('aes-256-gcm', DATA_KEY, iv);
+  const enc = Buffer.concat([c.update(String(plain), 'utf8'), c.final()]);
+  return ENC_PREFIX + Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64');
+}
+function decStr(raw) {
+  if (!raw || !raw.startsWith(ENC_PREFIX)) return raw; // plaintext (pre-migration)
+  if (!DATA_KEY) throw new Error('DATA_KEY is required to read encrypted data files');
+  const b = Buffer.from(raw.slice(ENC_PREFIX.length), 'base64');
+  const d = createDecipheriv('aes-256-gcm', DATA_KEY, b.subarray(0, 12));
+  d.setAuthTag(b.subarray(12, 28));
+  return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8');
+}
 // Data dir is env-overridable so tests can point at an isolated temp dir.
 const DATA_DIR = process.env.WATAPP_DATA_DIR || join(__dirname, 'data');
 // Under test we import this module for its exports without booting WhatsApp,
@@ -81,7 +109,7 @@ function ensureStatuses() {
   try { leads = readLeads(); } catch { return; }
   const missing = leads.filter((l) => !l.status);
   if (!missing.length) return;
-  try { writeFileSync(LEADS_PATH + `.bak.${Date.now()}`, JSON.stringify(leads, null, 2)); } catch {}
+  try { writeFileSync(LEADS_PATH + `.bak.${Date.now()}`, encStr(JSON.stringify(leads, null, 2))); } catch {}
   for (const l of leads) if (!l.status) l.status = deriveStatus(l);
   saveLeads(leads);
   console.log(`[migrate] backfilled status on ${missing.length} lead(s)`);
@@ -130,16 +158,16 @@ const CONFIG_DEFAULTS = {
 };
 function readConfig() {
   let saved = {};
-  try { saved = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); } catch {}
+  try { saved = JSON.parse(decStr(readFileSync(CONFIG_PATH, 'utf8'))); } catch {}
   return { ...CONFIG_DEFAULTS, ...saved };
 }
-function writeConfig(cfg) { writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2)); }
+function writeConfig(cfg) { writeFileSync(CONFIG_PATH, encStr(JSON.stringify(cfg, null, 2))); }
 
 // ── Documents (uploadable agreements etc.) ───────────────────────────────────────
 function readDocs() {
-  try { return JSON.parse(readFileSync(DOCS_META_PATH, 'utf8')); } catch { return []; }
+  try { return JSON.parse(decStr(readFileSync(DOCS_META_PATH, 'utf8'))); } catch { return []; }
 }
-function saveDocs(docs) { writeFileSync(DOCS_META_PATH, JSON.stringify(docs, null, 2)); }
+function saveDocs(docs) { writeFileSync(DOCS_META_PATH, encStr(JSON.stringify(docs, null, 2))); }
 
 // ── AI classifier (Claude) ─────────────────────────────────────────────────────
 // Falls back to keyword matching when ANTHROPIC_API_KEY is not set.
@@ -657,11 +685,11 @@ function rememberMessage(m) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function readLeads() {
-  return JSON.parse(readFileSync(LEADS_PATH, 'utf8'));
+  return JSON.parse(decStr(readFileSync(LEADS_PATH, 'utf8')));
 }
 
 function saveLeads(leads) {
-  writeFileSync(LEADS_PATH, JSON.stringify(leads, null, 2));
+  writeFileSync(LEADS_PATH, encStr(JSON.stringify(leads, null, 2)));
 }
 
 // Atomic read-modify-write: read the freshest leads, apply a SYNC mutation, save —
@@ -1942,7 +1970,24 @@ if (BOOT && TG_TOKEN) {
   tgPoll();
 }
 
+// One-time migration: when DATA_KEY is set, encrypt any still-plaintext data files
+// in place (next boot after the key is added). Idempotent — skips already-encrypted.
+function migrateEncryption() {
+  if (!DATA_KEY) return;
+  for (const p of [LEADS_PATH, CONFIG_PATH, DOCS_META_PATH]) {
+    try {
+      if (!existsSync(p)) continue;
+      const raw = readFileSync(p, 'utf8');
+      if (raw.startsWith(ENC_PREFIX)) continue; // already encrypted
+      JSON.parse(raw); // sanity: only encrypt valid JSON
+      writeFileSync(p, encStr(raw));
+      console.log(`[encrypt] migrated ${p.split('/').pop()} → encrypted at rest`);
+    } catch (e) { console.error(`[encrypt] migrate ${p} failed:`, e.message); }
+  }
+}
+
 if (BOOT) {
+  migrateEncryption(); // encrypt-at-rest migration BEFORE any reads/writes
   ensureStatuses(); // one-time idempotent backfill of `status` on existing leads
   const PORT = process.env.PORT || 10001;
   app.listen(PORT, () => console.log(`[server] http://localhost:${PORT}`));
@@ -1959,5 +2004,5 @@ export {
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
   bookingToken, verifyBookingToken, bookingUrl, bookingKind, bookingSlots,
-  applyHistoryMessage, applyOwnSend, isNewRepTakeover, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
+  encStr, decStr, applyHistoryMessage, applyOwnSend, isNewRepTakeover, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
 };
