@@ -736,13 +736,13 @@ function messageText(msg) {
     || (docMsg ? `[document: ${docMsg.fileName || 'file'}]` : '[media]');
 }
 
-// The chat partner (the lead) for a message, regardless of direction: in a 1:1
-// chat remoteJid is the lead for both inbound and our sent. Falls back to the
-// sender extraction (handles @lid privacy routing) when remoteJid isn't a phone.
+// The chat partner (the lead) for a message, regardless of direction. In a 1:1
+// chat remoteJid/remoteJidAlt is the partner for BOTH inbound and our sent.
+// senderPhoneOf picks the @s.whatsapp.net phone among the key fields — crucially
+// it handles @lid privacy routing (remoteJid is a long LID; the real phone is in
+// remoteJidAlt/senderPn). Must NOT use raw remoteJid digits: a @lid looks like a
+// 15–18 digit "number" and would match no lead.
 function chatPhone(msg) {
-  const jid = msg?.key?.remoteJid || '';
-  const digits = jid.split('@')[0].split(':')[0].replace(/\D/g, '');
-  if (/^\d{6,}$/.test(digits)) return digits;
   return senderPhoneOf(msg);
 }
 
