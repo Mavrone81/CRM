@@ -17,6 +17,7 @@ const STATE_LABEL: Record<string, string> = { open: 'Connected', connecting: 'Sc
 
 export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, showToast, refresh }: { numbers: WaNumber[]; outreach?: Outreach; newLeadCount?: number; onClose: () => void; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
   const [busy, setBusy] = useState(false);
+  const [capEdit, setCapEdit] = useState<Record<string, string>>({}); // local edit buffer for cap inputs
   // Combined remaining sends across connected numbers for today.
   const remainingCap = numbers.filter((n) => n.state === 'open').reduce((s, n) => s + Math.max(0, (n.cap || 40) - (n.sentToday || 0)), 0);
 
@@ -98,7 +99,7 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
                 <div className="flex items-center gap-2 text-xs">
                   <div className="flex-1 h-2 bg-gray-800 rounded-full overflow-hidden"><div className={`h-full ${(n.sentToday || 0) >= (n.cap || 40) ? 'bg-red-500' : 'bg-green-500'}`} style={{ width: `${Math.min(100, Math.round(((n.sentToday || 0) / (n.cap || 40)) * 100))}%` }} /></div>
                   <span className="text-gray-400 tabular-nums whitespace-nowrap">{n.sentToday || 0}/{n.cap || 40} today{(n.cap || 40) < (n.dailyCap || 40) ? ' (warming)' : ''}</span>
-                  <label className="text-gray-500 flex items-center gap-1 whitespace-nowrap">cap <input type="number" min={1} defaultValue={n.dailyCap || 40} onBlur={(e) => setCap(n.id, Number(e.target.value))} className="w-12 bg-gray-800 border border-gray-700 rounded px-1 py-0.5 text-gray-200 focus:outline-none focus:border-green-600" /></label>
+                  <label className="text-gray-500 flex items-center gap-1 whitespace-nowrap">cap <input type="number" min={1} value={capEdit[n.id] ?? String(n.dailyCap ?? 40)} onChange={(e) => { const v = e.target.value; setCapEdit((p) => ({ ...p, [n.id]: v })); if (v.trim() !== '') setCap(n.id, Math.max(1, Math.min(200, parseInt(v, 10) || 1))); }} className="w-12 bg-gray-800 border border-gray-700 rounded px-1 py-0.5 text-gray-200 focus:outline-none focus:border-green-600" /></label>
                 </div>
               )}
               {n.state !== 'open' && (n.qr
