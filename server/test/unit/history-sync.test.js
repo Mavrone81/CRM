@@ -23,15 +23,28 @@ test('records OUR sent history message onto sentReplies (both directions)', () =
   assert.ok(!leads[0].replies, 'not recorded as an inbound reply');
 });
 
-test('dedupes by id and by text (vs live + repeated history)', () => {
-  const leads = [{ id: 1, name: 'A', phone: '6591234567', replies: [{ text: 'hello' }] }]; // live entry, no id
-  assert.equal(applyHistoryMessage(leads, mk()), null, 'same text deduped vs live');
+test('dedups same id (re-sync) + same-text-near-time (live); KEEPS cross-rep messages', () => {
+  // re-sync: same message id twice → deduped
+  const leads = [{ id: 1, name: 'A', phone: '6591234567' }];
+  applyHistoryMessage(leads, mk({ message: { conversation: 'x' } }));
+  assert.equal(applyHistoryMessage(leads, mk({ message: { conversation: 'x' } })), null, 'same id deduped');
   assert.equal(leads[0].replies.length, 1);
-  // same id twice
-  const leads2 = [{ id: 1, name: 'A', phone: '6591234567' }];
-  applyHistoryMessage(leads2, mk({ message: { conversation: 'x' } }));
-  assert.equal(applyHistoryMessage(leads2, mk({ message: { conversation: 'x' } })), null, 'same id deduped');
+
+  // live entry (no id) with same text + near timestamp → deduped
+  const leads2 = [{ id: 1, name: 'A', phone: '6591234567', replies: [{ text: 'hello', timestamp: new Date(1719500000 * 1000).toISOString() }] }];
+  assert.equal(applyHistoryMessage(leads2, mk()), null, 'same text near-time deduped vs live');
   assert.equal(leads2[0].replies.length, 1);
+
+  // cross-rep reconcile: same text but a different message id / far-apart time → BOTH kept
+  const leads3 = [{ id: 1, name: 'A', phone: '6591234567', replies: [{ id: 'old', text: 'hi', timestamp: new Date(1700000000 * 1000).toISOString() }] }];
+  assert.equal(applyHistoryMessage(leads3, mk({ message: { conversation: 'hi' }, key: { remoteJid: '6591234567@s.whatsapp.net', id: 'new', fromMe: false } })), 1);
+  assert.equal(leads3[0].replies.length, 2, 'same text, different message → kept (reconciliation)');
+});
+
+test('tags backfilled entries with the source number (via)', () => {
+  const leads = [{ id: 1, name: 'A', phone: '6591234567' }];
+  applyHistoryMessage(leads, mk({ key: { remoteJid: '6591234567@s.whatsapp.net', id: 'v1', fromMe: true }, message: { conversation: 'from sam' } }), 'n1');
+  assert.equal(leads[0].sentReplies[0].via, 'n1');
 });
 
 test('skips unmatched numbers and contentless media', () => {

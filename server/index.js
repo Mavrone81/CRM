@@ -747,21 +747,28 @@ function chatPhone(msg) {
 }
 
 // Record ONE history message onto the matching lead (both directions: our sent →
-// sentReplies, theirs → replies), deduped by id-or-text. Mutates `leads` in place;
-// returns the touched lead id, or null. Pure given (leads, msg) — unit-tested.
-function applyHistoryMessage(leads, msg) {
+// sentReplies, theirs → replies). All chats with a lead RECONCILE onto that one
+// lead — even messages from different rep numbers — and get sorted by time, so a
+// conversation handed over from one rep to another reads as one thread.
+// Dedup is by message id (so re-syncs don't duplicate) and, for live entries that
+// have no id, by same-text-within-2min — so genuinely different cross-rep messages
+// (same text, different time) are KEPT, not dropped. `via` = source number id.
+// Mutates `leads` in place; returns the touched lead id, or null. Unit-tested.
+function applyHistoryMessage(leads, msg, via) {
   if (!msg?.message) return null;
   const lead = matchLead(leads, chatPhone(msg));
   if (!lead) return null;
   const text = messageText(msg);
   if (!text || text === '[media]') return null; // skip contentless media
   const id = msg.key?.id || null;
-  const ts = msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000).toISOString() : new Date().toISOString();
+  const tsMs = msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now();
   const key = msg.key?.fromMe ? 'sentReplies' : 'replies';
   lead[key] = lead[key] || [];
-  if (lead[key].some((r) => (id && r.id === id) || r.text === text)) return null; // dedupe vs live + history
-  const entry = { id, text, timestamp: ts, backfilled: true };
+  const dup = lead[key].some((r) => (id && r.id) ? r.id === id : (r.text === text && Math.abs(new Date(r.timestamp || 0).getTime() - tsMs) < 120000));
+  if (dup) return null;
+  const entry = { id, text, timestamp: new Date(tsMs).toISOString(), backfilled: true };
   if (msg.key?.fromMe) entry.channel = 'whatsapp';
+  if (via) entry.via = via;
   lead[key].push(entry);
   return lead.id;
 }
@@ -813,7 +820,7 @@ async function connectNumber(numId) {
     const touched = new Set();
     mutateLeads((leads) => {
       for (const msg of messages) {
-        const id = applyHistoryMessage(leads, msg); // records BOTH directions, deduped
+        const id = applyHistoryMessage(leads, msg, numId); // records BOTH directions, deduped, tagged with source number
         if (id != null) touched.add(id);
       }
       for (const id of touched) {
