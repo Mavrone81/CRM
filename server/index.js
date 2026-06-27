@@ -736,6 +736,36 @@ function messageText(msg) {
     || (docMsg ? `[document: ${docMsg.fileName || 'file'}]` : '[media]');
 }
 
+// The chat partner (the lead) for a message, regardless of direction: in a 1:1
+// chat remoteJid is the lead for both inbound and our sent. Falls back to the
+// sender extraction (handles @lid privacy routing) when remoteJid isn't a phone.
+function chatPhone(msg) {
+  const jid = msg?.key?.remoteJid || '';
+  const digits = jid.split('@')[0].split(':')[0].replace(/\D/g, '');
+  if (/^\d{6,}$/.test(digits)) return digits;
+  return senderPhoneOf(msg);
+}
+
+// Record ONE history message onto the matching lead (both directions: our sent →
+// sentReplies, theirs → replies), deduped by id-or-text. Mutates `leads` in place;
+// returns the touched lead id, or null. Pure given (leads, msg) — unit-tested.
+function applyHistoryMessage(leads, msg) {
+  if (!msg?.message) return null;
+  const lead = matchLead(leads, chatPhone(msg));
+  if (!lead) return null;
+  const text = messageText(msg);
+  if (!text || text === '[media]') return null; // skip contentless media
+  const id = msg.key?.id || null;
+  const ts = msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000).toISOString() : new Date().toISOString();
+  const key = msg.key?.fromMe ? 'sentReplies' : 'replies';
+  lead[key] = lead[key] || [];
+  if (lead[key].some((r) => (id && r.id === id) || r.text === text)) return null; // dedupe vs live + history
+  const entry = { id, text, timestamp: ts, backfilled: true };
+  if (msg.key?.fromMe) entry.channel = 'whatsapp';
+  lead[key].push(entry);
+  return lead.id;
+}
+
 // ── WhatsApp ──────────────────────────────────────────────────────────────────
 async function connectNumber(numId) {
   const label = (numbersCfg().find((n) => n.id === numId) || {}).label || numId;
@@ -769,40 +799,34 @@ async function connectNumber(numId) {
   // capture any lead replies that arrived while the bot was offline, then classify.
   sock.ev.on('messaging-history.set', async ({ messages }) => {
     if (!messages?.length) return;
-    const leads = readLeads();
     const touched = new Set();
-    for (const msg of messages) {
-      if (msg.key?.fromMe || !msg.message) continue;
-      const lead = matchLead(leads, senderPhoneOf(msg));
-      if (!lead) continue;
-      const text = messageText(msg);
-      if (text === '[media]') continue;
-      if (!lead.replies) lead.replies = [];
-      if (lead.replies.some((r) => r.text === text)) continue; // dedupe vs existing
-      const ts = msg.messageTimestamp ? new Date(Number(msg.messageTimestamp) * 1000).toISOString() : new Date().toISOString();
-      lead.replies.push({ text, timestamp: ts, backfilled: true });
-      touched.add(lead.id);
-    }
+    mutateLeads((leads) => {
+      for (const msg of messages) {
+        const id = applyHistoryMessage(leads, msg); // records BOTH directions, deduped
+        if (id != null) touched.add(id);
+      }
+      for (const id of touched) {
+        const l = leads.find((x) => x.id === id);
+        l.replies?.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        l.sentReplies?.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      }
+    });
     if (!touched.size) return;
-    for (const id of touched) {
-      const l = leads.find((x) => x.id === id);
-      l.replies.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-    }
-    saveLeads(leads);
-    console.log(`[backfill] history sync: ${touched.size} lead(s) got replies — classifying…`);
+    console.log(`[backfill] history sync recorded conversation for ${touched.size} lead(s)`);
+    // Only (re)classify still-untriaged leads, so a sync NEVER disturbs statuses
+    // already set (review / pipeline / closed). Leads with no inbound are skipped.
     for (const id of touched) {
       try {
         const fresh = readLeads();
         const l = fresh.find((x) => x.id === id);
-        if (!l?.replies?.length) continue;
+        if (!l || !l.replies?.length) continue;
+        if (!['new', 'contacted'].includes(l.status || 'new')) continue;
         const ai = await classifyReplies(l.name, l.replies, repNameFor(l), bookingUrl(l.id));
-        l.ai = { ...ai, classifiedAt: new Date().toISOString() };
-        if (ai.category === 'interested' && !l.stage) { l.stage = 'brief'; l.wf = { ...(l.wf || {}), enteredAt: new Date().toISOString() }; }
-        saveLeads(fresh);
-        console.log(`[backfill] #${id} ${l.name}: ${ai.category}`);
+        mutateLeads((ls) => { const t = ls.find((x) => x.id === id); if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; t.status = statusFromCategory(ai.category); } });
+        console.log(`[backfill] #${id} ${l.name}: ${ai.category} -> ${statusFromCategory(ai.category)}`);
       } catch (e) { console.error('[backfill] classify failed for', id, e.message); }
     }
-    console.log(`[backfill] done — ${touched.size} lead(s) updated`);
+    console.log(`[backfill] done — ${touched.size} lead(s) synced`);
   });
 
   // Track incoming replies
@@ -1795,4 +1819,5 @@ export {
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
   bookingToken, verifyBookingToken, bookingUrl, bookingKind, bookingSlots,
+  applyHistoryMessage, chatPhone,
 };
