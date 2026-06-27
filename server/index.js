@@ -1015,7 +1015,7 @@ app.use(express.json({ limit: '15mb' })); // base64 document uploads
 // Status + QR
 app.get('/api/status', (_req, res) => {
   const leadsForCount = readLeads();
-  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, repName: n.repName || '', state: c.state || 'close', qr: c.qr || null, phone: c.phone || null, health: c.health || 'ok', paused: !!n.paused, probe: c.probe || null, sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n) }; });
+  const numbers = numbersCfg().map((n) => { const c = conns.get(n.id) || {}; return { id: n.id, label: c.label || n.label, repName: n.repName || '', state: c.state || 'close', qr: c.qr || null, phone: c.phone || null, health: c.health || 'ok', paused: !!n.paused, probe: c.probe || null, sentToday: sentTodayFor(n.id, leadsForCount), cap: warmCap(n), dailyCap: n.dailyCap || DEFAULT_CAP }; });
   const state = anyOpen() ? 'open' : (numbers.some((n) => n.state === 'connecting') ? 'connecting' : 'close');
   const qr = (numbers.find((n) => n.state === 'connecting' && n.qr) || {}).qr || null;
   res.json({ state, qr, numbers, ai: !!anthropic, autoReply: readConfig().autoReply, telegram: { state: tgState, username: tgUsername }, outreach: { running: outreach.running, queued: outreach.queue.length, sent: outreach.sent, failed: outreach.failed, windowOpen: inSendWindow() } });
