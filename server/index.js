@@ -797,8 +797,19 @@ async function connectNumber(numId) {
 
   // Backfill: when WhatsApp syncs chat history (e.g. after re-linking the number),
   // capture any lead replies that arrived while the bot was offline, then classify.
-  sock.ev.on('messaging-history.set', async ({ messages }) => {
+  sock.ev.on('messaging-history.set', async ({ messages, syncType, progress }) => {
     if (!messages?.length) return;
+    // DIAGNOSTIC: why do some numbers match 0 leads? Log counts + unmatched numbers.
+    try {
+      const _l = readLeads();
+      let _me = 0, _hit = 0; const _miss = new Set();
+      for (const m of messages) {
+        if (m.key?.fromMe) _me++;
+        const p = chatPhone(m);
+        if (p && matchLead(_l, p)) _hit++; else _miss.add(p || '(no#)');
+      }
+      console.log(`[history:${numId}] ${messages.length} msgs syncType=${syncType} progress=${progress} fromMe=${_me} matched=${_hit} unmatched=[${[..._miss].slice(0, 25).join(',')}]`);
+    } catch (e) { console.error('[history] diag failed', e.message); }
     const touched = new Set();
     mutateLeads((leads) => {
       for (const msg of messages) {
