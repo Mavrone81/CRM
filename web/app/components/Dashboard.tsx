@@ -55,7 +55,7 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col min-h-screen">
-      <header className="border-b border-gray-800 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+      <header className="sticky top-0 z-30 bg-gray-950/90 backdrop-blur border-b border-gray-800 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
           <span className="text-xl sm:text-2xl font-bold text-green-400">Watapp</span>
           <span className="text-gray-500 text-xs sm:text-sm">{leads.length} leads · {sentCount} sent</span>
