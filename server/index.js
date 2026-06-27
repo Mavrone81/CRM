@@ -742,6 +742,15 @@ function buildMessage(name, repName = '') {
     .replace(/\[RepIntro\]/g, repName ? `I'm ${repName} — ` : '');
 }
 
+// Gentle follow-up NUDGE for a cold lead we've already contacted who hasn't
+// replied — does NOT re-introduce the whole pitch, just a light, no-pressure check-in.
+const FOLLOWUP_SPINTAX = `{Hi|Hey|Hello} [Name], [RepIntro]{just following up on my earlier message|circling back on my last note|just checking in again|wanted to gently follow up} 😊 {No worries if the timing isn't right|No pressure at all|Totally understand if now's not the time} — {I'd still love to share more if you're open|the opportunity is still open if you're keen|happy to tell you more whenever suits you}. {Would you be open to a quick chat?|Keen to hear your thoughts!|Just reply "Interested" and I'll fill you in.}`;
+function buildFollowup(name, repName = '') {
+  return spin(FOLLOWUP_SPINTAX)
+    .replace(/\[Name\]/g, name)
+    .replace(/\[RepIntro\]/g, repName ? `it's ${repName} here — ` : '');
+}
+
 // Extract the sender's real phone from a message's various JID fields (handles
 // WhatsApp Business / @lid privacy routing).
 function senderPhoneOf(msg) {
@@ -1875,7 +1884,10 @@ app.post('/api/leads/:id/suggest', async (req, res) => {
       const f = readLeads(); const t = f.find((l) => l.id === lead.id);
       if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; saveLeads(f); }
     } else {
-      suggested = buildMessage(lead.name, repNameFor(lead)); // spintax opening — different every call
+      // No reply yet: a NEW lead gets the cold opener; an already-contacted lead
+      // gets a gentle follow-up nudge (so cold leads can be chased without re-pitching).
+      const coldContacted = lead.status === 'contacted' || (lead.sent && lead.status !== 'new');
+      suggested = coldContacted ? buildFollowup(lead.name, repNameFor(lead)) : buildMessage(lead.name, repNameFor(lead));
       const f = readLeads(); const t = f.find((l) => l.id === lead.id);
       if (t) { t.ai = { ...(t.ai || {}), suggested_reply: suggested, classifiedAt: new Date().toISOString() }; saveLeads(f); }
     }
@@ -1999,7 +2011,7 @@ if (BOOT) {
 export {
   app, conns,
   deriveStatus, statusFromCategory, normalisePhone, canonPhone, toJid, isOptOut,
-  spin, buildMessage, senderPhoneOf, matchLead, messageText, warmCap, sentTodayFor,
+  spin, buildMessage, buildFollowup, senderPhoneOf, matchLead, messageText, warmCap, sentTodayFor,
   inSendWindow, classifyKeyword, attendKeyword, readLeads, saveLeads, mutateLeads,
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,

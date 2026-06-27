@@ -27,8 +27,11 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
   };
 
   const queue = leads
-    .filter((l) => l.status === 'question' || l.status === 'review' || l.status === 'new')
-    .sort((a, b) => Number(b.needsReply) - Number(a.needsReply));
+    .filter((l) => l.status === 'question' || l.status === 'review' || l.status === 'new' || l.status === 'contacted')
+    // needs-reply first; cold (contacted, no reply) leads sink to the bottom for follow-up.
+    .sort((a, b) => Number(b.needsReply) - Number(a.needsReply) || (Number(a.status === 'contacted') - Number(b.status === 'contacted')));
+  const triageCount = queue.filter((l) => l.status !== 'contacted').length;
+  const coldCount = queue.length - triageCount;
 
   const mark = (id: number, on: boolean) => setBusy((p) => { const n = new Set(p); on ? n.add(id) : n.delete(id); return n; });
   const act = async (id: number, fn: () => Promise<{ ok: boolean; data: { ok?: boolean; error?: string } }>, msg: string) => {
@@ -43,7 +46,7 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
     <div className="flex-1 flex flex-col min-h-0">
       <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 flex flex-wrap items-center gap-3">
         <h2 className="text-base sm:text-lg font-semibold text-gray-100">Action Inbox</h2>
-        <span className="text-xs sm:text-sm text-gray-500">{queue.length} need a decision</span>
+        <span className="text-xs sm:text-sm text-gray-500">{triageCount} need a decision{coldCount ? ` · ${coldCount} cold to follow up` : ''}</span>
         {queue.length > 0 && <button onClick={() => setExpanded(allExpanded ? new Set() : new Set(queue.map((l) => l.id)))} className="ml-auto text-xs text-gray-400 hover:text-gray-200 border border-gray-700 rounded-lg px-2.5 py-1">{allExpanded ? 'Collapse all' : 'Expand all'}</button>}
       </div>
       <div className="flex-1 overflow-auto p-4 sm:p-6 flex flex-col gap-3">
@@ -57,11 +60,11 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
           const isCol = !expanded.has(l.id);
           const lastMsg = thread[thread.length - 1];
           return (
-            <div key={l.id} className={`rounded-xl border p-4 flex flex-col gap-2 ${l.status === 'question' ? 'border-yellow-800/50 bg-yellow-950/10' : l.status === 'new' ? 'border-gray-700 bg-gray-900/40' : 'border-orange-800/40 bg-orange-950/10'}`}>
+            <div key={l.id} className={`rounded-xl border p-4 flex flex-col gap-2 ${l.status === 'question' ? 'border-yellow-800/50 bg-yellow-950/10' : l.status === 'new' ? 'border-gray-700 bg-gray-900/40' : l.status === 'contacted' ? 'border-sky-800/40 bg-sky-950/10' : 'border-orange-800/40 bg-orange-950/10'}`}>
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-medium text-gray-100">{l.name}</span>
                 <span className="text-xs text-gray-500 font-mono">{fmtPhone(l.phone)}</span>
-                <span className={`text-xs px-2 py-0.5 rounded-full ${l.status === 'question' ? 'bg-yellow-900 text-yellow-300' : l.status === 'new' ? 'bg-gray-800 text-gray-300' : 'bg-orange-900/60 text-orange-300'}`}>{l.status === 'question' ? '? Question' : l.status === 'new' ? 'New — to contact' : 'Needs review'}</span>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${l.status === 'question' ? 'bg-yellow-900 text-yellow-300' : l.status === 'new' ? 'bg-gray-800 text-gray-300' : l.status === 'contacted' ? 'bg-sky-900/60 text-sky-300' : 'bg-orange-900/60 text-orange-300'}`}>{l.status === 'question' ? '? Question' : l.status === 'new' ? 'New — to contact' : l.status === 'contacted' ? '❄ Cold — follow up' : 'Needs review'}</span>
                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${l.channel === 'telegram' ? 'bg-sky-950 border-sky-800 text-sky-300' : 'bg-green-950 border-green-800 text-green-300'}`}>{l.channel === 'telegram' ? '✈ Telegram' : 'WhatsApp'}</span>
                 {l.needsReply && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new</span>}
                 <button onClick={() => setExpanded((e) => { const n = new Set(e); if (n.has(l.id)) n.delete(l.id); else n.add(l.id); return n; })} className="ml-auto text-gray-500 hover:text-gray-200 text-xs whitespace-nowrap px-1" title={isCol ? 'Expand' : 'Collapse'}>{isCol ? '▸ expand' : '▾ collapse'}</button>

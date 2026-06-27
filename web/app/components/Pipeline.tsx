@@ -44,6 +44,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
   const [sendText, setSendText] = useState('');
   const [sort, setSort] = useState('contacted');
   const [suggesting, setSuggesting] = useState<number | null>(null);
+  const [editText, setEditText] = useState<Record<number, string>>({}); // amended suggested replies (per lead)
 
   const loadConfig = useCallback(async () => { try { setConfig(await (await fetch(`${API}/config`)).json()); } catch {} }, []);
   useEffect(() => { loadConfig(); }, [loadConfig]);
@@ -59,7 +60,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
     try {
       const r = await fetch(`${API}/leads/${id}/suggest`, { method: 'POST' });
       const d = await r.json().catch(() => ({}));
-      if (r.ok && d.suggested_reply) { showToast('Regenerated'); refresh(); }
+      if (r.ok && d.suggested_reply) { setEditText((p) => { const n = { ...p }; delete n[id]; return n; }); showToast('Regenerated'); refresh(); }
       else showToast(d.error || 'Could not regenerate', false);
     } catch { showToast('Network error', false); } finally { setSuggesting(null); }
   };
@@ -101,16 +102,23 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
           {lastReplyOf(l) && <span>Replied: <span className="text-gray-400">{relTime(lastReplyOf(l))}</span></span>}
         </div>
 
-        {/* AI-recommended reply / invite — Regenerate (✨), Send (via the lead's number), or Copy */}
-        {l.ai?.suggested_reply ? (
-          <div className="text-xs bg-gray-950/60 border border-gray-800 rounded-lg p-2 flex items-start gap-2">
-            <span className="text-purple-300 whitespace-nowrap">Suggested:</span>
-            <span className="text-gray-300 flex-1 min-w-0 break-words [overflow-wrap:anywhere]">{l.ai.suggested_reply}</span>
-            <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} title="Regenerate suggestion" className="text-purple-300 hover:text-purple-200 whitespace-nowrap disabled:opacity-50">{suggesting === l.id ? '…' : '✨ Regenerate'}</button>
-            <button onClick={() => act(l.id, () => sendReply(l.id, l.ai!.suggested_reply), `Sent to ${l.name}`)} disabled={b} className="text-green-400 hover:text-green-300 whitespace-nowrap font-medium">Send</button>
-            <button onClick={() => { navigator.clipboard.writeText(l.ai!.suggested_reply); showToast('Copied'); }} className="text-gray-400 hover:text-gray-200 whitespace-nowrap">Copy</button>
+        {/* AI-recommended reply / invite — editable, then Regenerate (✨), Send (via the lead's number), or Copy */}
+        {l.ai?.suggested_reply ? (() => {
+          const val = editText[l.id] ?? l.ai.suggested_reply;
+          return (
+          <div className="flex flex-col gap-1.5 bg-gray-950/60 border border-gray-800 rounded-lg p-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-purple-300">Suggested reply <span className="text-gray-600">· editable</span></span>
+              <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} title="Regenerate suggestion" className="text-[11px] text-purple-300 hover:text-purple-200 whitespace-nowrap disabled:opacity-50">{suggesting === l.id ? '…' : '✨ Regenerate'}</button>
+            </div>
+            <textarea value={val} onChange={(e) => setEditText((p) => ({ ...p, [l.id]: e.target.value }))} rows={3} className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-green-600" />
+            <div className="flex gap-2">
+              <button onClick={() => act(l.id, () => sendReply(l.id, val), `Sent to ${l.name}`)} disabled={b || !val.trim()} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg">{b ? '…' : 'Send'}</button>
+              <button onClick={() => { navigator.clipboard.writeText(val); showToast('Copied'); }} className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1.5">Copy</button>
+            </div>
           </div>
-        ) : (
+          );
+        })() : (
           <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} className="self-start text-xs text-purple-300 hover:text-purple-200 border border-purple-900/50 rounded-lg px-2.5 py-1 disabled:opacity-50">{suggesting === l.id ? 'Generating…' : '✨ Suggest a reply'}</button>
         )}
 
