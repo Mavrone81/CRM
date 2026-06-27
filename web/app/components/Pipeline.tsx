@@ -71,10 +71,12 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
   const ts = (s: string | null) => (s ? new Date(s).getTime() : 0);
   const sortLeads = (list: Lead[]) => {
     const a = [...list];
-    if (sort === 'name') a.sort((x, y) => x.name.localeCompare(y.name));
-    else if (sort === 'reply') a.sort((x, y) => ts(lastReplyOf(y)) - ts(lastReplyOf(x)));
-    else if (sort === 'needs') a.sort((x, y) => (Number(!!y.needsReply) - Number(!!x.needsReply)) || (ts(lastReplyOf(y)) - ts(lastReplyOf(x))));
-    else a.sort((x, y) => ts(lastContactOf(x)) - ts(lastContactOf(y))); // coldest / never-contacted first
+    // New replies always float to the top, then the chosen sort within each group.
+    const nr = (x: Lead, y: Lead) => Number(!!y.needsReply) - Number(!!x.needsReply);
+    if (sort === 'name') a.sort((x, y) => nr(x, y) || x.name.localeCompare(y.name));
+    else if (sort === 'reply') a.sort((x, y) => nr(x, y) || (ts(lastReplyOf(y)) - ts(lastReplyOf(x))));
+    else if (sort === 'needs') a.sort((x, y) => nr(x, y) || (ts(lastReplyOf(y)) - ts(lastReplyOf(x))));
+    else a.sort((x, y) => nr(x, y) || (ts(lastContactOf(x)) - ts(lastContactOf(y)))); // coldest / never-contacted first
     return a;
   };
 
