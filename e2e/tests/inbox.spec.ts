@@ -12,6 +12,8 @@ test.describe('action inbox', () => {
     // The seeded "review" lead is in the triage queue.
     const card = page.locator('div.rounded-xl', { hasText: 'Alice Reviewer' });
     await expect(card).toBeVisible();
+    // Cards are collapsed by default — expand to reveal the thread + actions.
+    await card.getByRole('button', { name: /expand/ }).click();
     // Its inbound reply is shown in the thread.
     await expect(card.getByText('what exactly is this opportunity about?', { exact: false })).toBeVisible();
 

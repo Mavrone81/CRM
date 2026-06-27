@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { login } from './helpers';
 
 test.describe('action inbox — collapse / expand', () => {
-  test('Collapse all hides card actions; Expand all brings them back', async ({ page }) => {
+  test('cards are collapsed by default; Expand all reveals actions; Collapse all hides them', async ({ page }) => {
     await login(page);
     await page.getByRole('banner').getByRole('button', { name: /Inbox/ }).click();
     await expect(page.getByRole('heading', { name: 'Action Inbox' })).toBeVisible();
@@ -10,36 +10,38 @@ test.describe('action inbox — collapse / expand', () => {
     // The seeded "question" lead is in the triage queue.
     const card = page.locator('div.rounded-xl', { hasText: 'Kara Collapse' });
     await expect(card).toBeVisible();
-
-    // Expanded by default: the action buttons are present.
     const interested = card.getByRole('button', { name: '→ Interested' });
-    await expect(interested).toBeVisible();
 
-    // Collapse all -> the action buttons hide, only a one-line preview remains.
-    await page.getByRole('button', { name: 'Collapse all' }).click();
+    // Collapsed by default: actions hidden, only a one-line preview shows.
     await expect(interested).toBeHidden();
     await expect(card.getByText('Quick question about timing?')).toBeVisible();
 
-    // Expand all -> the action buttons return.
+    // Expand all -> the action buttons appear.
     await page.getByRole('button', { name: 'Expand all' }).click();
     await expect(interested).toBeVisible();
+
+    // Collapse all -> hidden again.
+    await page.getByRole('button', { name: 'Collapse all' }).click();
+    await expect(interested).toBeHidden();
   });
 
-  test('a single card toggles independently', async ({ page }) => {
+  test('a single card expands/collapses independently', async ({ page }) => {
     await login(page);
     await page.getByRole('banner').getByRole('button', { name: /Inbox/ }).click();
     await expect(page.getByRole('heading', { name: 'Action Inbox' })).toBeVisible();
 
     const card = page.locator('div.rounded-xl', { hasText: 'Kara Collapse' });
     const interested = card.getByRole('button', { name: '→ Interested' });
-    await expect(interested).toBeVisible();
 
-    // Per-card collapse toggle (header chevron button).
-    await card.getByRole('button', { name: /collapse/ }).click();
+    // Collapsed by default.
     await expect(interested).toBeHidden();
 
-    // Toggle back open.
+    // Expand this one card (header chevron).
     await card.getByRole('button', { name: /expand/ }).click();
     await expect(interested).toBeVisible();
+
+    // Collapse it again.
+    await card.getByRole('button', { name: /collapse/ }).click();
+    await expect(interested).toBeHidden();
   });
 });
