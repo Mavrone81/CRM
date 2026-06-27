@@ -29,8 +29,11 @@ export default function Numbers({ numbers, outreach, newLeadCount = 0, onClose, 
   const pause = async (id: string, paused: boolean) => { await fetch(`${API}/numbers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused }) }); showToast(paused ? 'Paused — kept out of outreach, still tested every 6h' : 'Resumed'); refresh(); };
   const testNow = async (id: string) => { const r = await fetch(`${API}/numbers/${id}/probe`, { method: 'POST' }); const d = await r.json().catch(() => ({})); if (r.ok) showToast(`Probe sent to ${d.to || 'control'} — watch for ✓✓`); else showToast(d.error || 'Probe failed', false); refresh(); };
   const remove = async (id: string) => { if (!confirm('Remove this number? Its session is cleared.')) return; await fetch(`${API}/numbers/${id}`, { method: 'DELETE' }); showToast('Removed'); refresh(); };
-  const setCap = async (id: string, dailyCap: number) => { await fetch(`${API}/numbers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dailyCap }) }); refresh(); };
-  const setRepName = async (id: string, repName: string) => { await fetch(`${API}/numbers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repName }) }); showToast(repName ? `Rep name set to ${repName}` : 'Rep name cleared'); refresh(); };
+  // No refresh() here: these run on input blur, and a refresh re-render during the
+  // close-click was swallowing the ✕ (modal wouldn't close). The value is already
+  // persisted server-side and the dashboard polls status every 2.5s.
+  const setCap = async (id: string, dailyCap: number) => { await fetch(`${API}/numbers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dailyCap }) }); showToast(`Daily cap set to ${dailyCap}`); };
+  const setRepName = async (id: string, repName: string) => { await fetch(`${API}/numbers/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repName }) }); showToast(repName ? `Rep name set to ${repName}` : 'Rep name cleared'); };
   const startOutreach = async () => {
     const over = newLeadCount > remainingCap;
     const msg = `Start paced outreach to ${newLeadCount} New lead(s)?\n\n` +
