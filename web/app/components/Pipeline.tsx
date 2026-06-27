@@ -6,7 +6,7 @@ import type { Status } from './status';
 import { PIPELINE_ORDER, STATUS_META } from './status';
 import { sessionDisplay, relTime, lastContactOf, lastReplyOf } from './types';
 import { fmtPhone } from './countryCodes';
-import { API, setStatus, logReply, sendReply } from './leadApi';
+import { API, setStatus, logReply, sendReply, sendAgreement } from './leadApi';
 
 // Tabs across the pipeline. Some statuses need a session pick to advance.
 const TABS: { key: Status; hint: string }[] = [
@@ -135,6 +135,8 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
         )}
 
         <div className="flex gap-2 flex-wrap">
+          {l.status === 'attended' && <button onClick={() => act(l.id, () => sendAgreement(l.id), `📎 Agreement (PDF) sent to ${l.name}`)} disabled={b} title="Sends the agreement PDF via this lead's number and moves them to Agreement"
+            className="bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">{b ? '…' : '📎 Send agreement'}</button>}
           {next && <button onClick={() => act(l.id, () => setStatus(l.id, next.to, next.contacts ? { contacted: true } : undefined), `${l.name}: ${next.label}`)} disabled={b}
             className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">{b ? '…' : next.label}</button>}
           {l.channel === 'telegram' && <button onClick={() => { setSendFor(sendFor === l.id ? null : l.id); setSendText(l.ai?.suggested_reply || ''); }} className="text-xs text-sky-400 hover:text-sky-300 px-2 py-1.5 font-medium">Reply ✈</button>}

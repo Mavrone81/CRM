@@ -12,7 +12,10 @@
     "channel": "whatsapp",
     "needsReply": true,
     "replies": [
-      { "text": "Hi, what exactly is this opportunity about?", "timestamp": "2026-06-02T03:00:00.000Z" }
+      {
+        "text": "Hi, what exactly is this opportunity about?",
+        "timestamp": "2026-06-02T03:00:00.000Z"
+      }
     ],
     "ai": {
       "category": "other",
@@ -37,7 +40,10 @@
     "assignedNumber": "n2",
     "stage": "attended",
     "replies": [
-      { "text": "Yes I attended, looking forward to next steps!", "timestamp": "2026-06-05T03:00:00.000Z" }
+      {
+        "text": "Yes I attended, looking forward to next steps!",
+        "timestamp": "2026-06-05T03:00:00.000Z"
+      }
     ],
     "status": "attended"
   },
@@ -82,7 +88,10 @@
     "channel": "whatsapp",
     "needsReply": true,
     "replies": [
-      { "text": "Is there any upfront cost involved?", "timestamp": "2026-06-08T03:00:00.000Z" }
+      {
+        "text": "Is there any upfront cost involved?",
+        "timestamp": "2026-06-08T03:00:00.000Z"
+      }
     ],
     "status": "question"
   },
@@ -155,13 +164,16 @@
     "channel": "whatsapp",
     "assignedNumber": "n1",
     "replies": [
-      { "text": "Yes I'm interested, can you tell me more?", "timestamp": "2026-06-11T03:00:00.000Z" }
+      {
+        "text": "Yes I'm interested, can you tell me more?",
+        "timestamp": "2026-06-11T03:00:00.000Z"
+      }
     ],
     "ai": {
       "category": "interested",
       "confidence": "low",
       "reason": "Keyword match (no API key set)",
-      "suggested_reply": "Happy to share more — here are a few details to get you started.",
+      "suggested_reply": "Happy to share more \u2014 here are a few details to get you started.",
       "classifiedAt": "2026-06-11T03:01:00.000Z"
     },
     "status": "interested"
@@ -194,7 +206,10 @@
     "channel": "whatsapp",
     "needsReply": true,
     "replies": [
-      { "text": "Quick question about timing?", "timestamp": "2026-06-11T03:00:00.000Z" }
+      {
+        "text": "Quick question about timing?",
+        "timestamp": "2026-06-11T03:00:00.000Z"
+      }
     ],
     "ai": {
       "category": "question",
@@ -217,7 +232,30 @@
     "sentAt": "2026-06-10T01:00:00.000Z",
     "channel": "whatsapp",
     "replies": [],
-    "wf": { "session": "full1", "bookedAt": "2026-06-12T03:00:00.000Z" },
+    "wf": {
+      "session": "full1",
+      "bookedAt": "2026-06-12T03:00:00.000Z"
+    },
     "status": "scheduled"
+  },
+  {
+    "id": 30,
+    "name": "Pat Agreement",
+    "phone": "6512349999",
+    "email": "",
+    "notes": "",
+    "adviser": "",
+    "created": "2026-06-01T00:00:00.000Z",
+    "sent": true,
+    "sentAt": "2026-06-01T01:00:00.000Z",
+    "channel": "whatsapp",
+    "assignedNumber": "n2",
+    "replies": [
+      {
+        "text": "Attended, ready for the agreement",
+        "timestamp": "2026-06-05T03:00:00.000Z"
+      }
+    ],
+    "status": "attended"
   }
 ]

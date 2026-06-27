@@ -23,6 +23,7 @@ test('POST /api/leads/:id/send goes out via the lead\'s assigned number', async 
   assert.equal(S.records.length, 1);
   assert.equal(S.records[0].numId, 'n2');
   assert.equal(S.records[0].msg.text, 'hello there');
+  assert.ok(!S.records[0].msg.document, '/send is text-only — agreements need /wf/agreement to attach the PDF');
 });
 
 test('POST /api/leads/:id/send is blocked for an opted-out lead', async () => {

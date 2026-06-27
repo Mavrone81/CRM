@@ -26,6 +26,11 @@ export const logReply = (id: number, text: string) => post(`/leads/${id}/reply`,
 // Send an outbound reply (Telegram sends directly; WhatsApp returns an error in manual mode).
 export const sendReply = (id: number, text: string) => post(`/leads/${id}/send`, { text });
 
+// Send the associate agreement — the PDF document (not just text) via the lead's
+// own number, and advance status to 'agreement'. Use this for the attended→agreement
+// step so the attachment actually goes out.
+export const sendAgreement = (id: number) => post(`/wf/agreement/${id}`);
+
 // Edit lead fields (name, phone, email, notes, adviser, assignedNumber…).
 export async function updateLead(id: number, fields: Record<string, unknown>) {
   const r = await fetch(`${API}/leads/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });

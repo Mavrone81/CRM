@@ -59,6 +59,10 @@ for (const [numId, phone] of [['n1', '6511110001'], ['n2', '6511110002'], ['n3',
 const bookTokens = { briefing: bookingToken(10), signed: bookingToken(11), 10: bookingToken(10), 11: bookingToken(11) };
 writeFileSync(join(__dirname, '.book-tokens.json'), JSON.stringify(bookTokens, null, 2));
 
+// 4c) Expose captured outbound sends so e2e specs can assert what actually went
+//     out (e.g. that "Send agreement" really sent a document, not just text).
+app.get('/__test/sent', (_q, res) => res.json(captured));
+
 // 5) Listen ourselves (index.js skips app.listen under NODE_ENV=test).
 const PORT = Number(process.env.PORT) || 10001;
 app.listen(PORT, () => {
