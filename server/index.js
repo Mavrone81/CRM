@@ -791,6 +791,47 @@ async function leadLidMap(sock) {
   return _leadLid.map;
 }
 
+// True if a message is one of OUR cold-outreach openers (distinctive phrases that
+// don't appear in personal chats) — used to spot recruitment recipients in history.
+function isOutreachOpener(text) {
+  return /lost my chat history|reply ["']?interested|still open to (hearing|exploring)/i.test(text || '');
+}
+// phone-digits -> display name, from a history event's contacts (handles @lid via lidMap).
+function contactNameMap(contacts, lidMap) {
+  const map = {};
+  for (const c of contacts || []) {
+    const name = (c.name || c.notify || c.verifiedName || '').trim();
+    if (!name) continue;
+    const id = c.id || '', lid = c.lid || '';
+    let phone = '';
+    if (id.endsWith('@s.whatsapp.net')) phone = id.split('@')[0].split(':')[0];
+    else if (lid.endsWith('@s.whatsapp.net')) phone = lid.split('@')[0].split(':')[0];
+    else { const k = normLid(id.endsWith('@lid') ? id : lid); if (k && lidMap && lidMap[k]) phone = lidMap[k]; }
+    if (phone) map[phone] = name;
+  }
+  return map;
+}
+// Create leads for OUTREACH recipients in `messages` that aren't in the CRM yet
+// (we sent them the opener, their number resolves to a phone, no existing lead).
+// Mutates `leads`; returns the array of created leads. `nameMap` from contactNameMap.
+function createOutreachLeads(leads, messages, lidMap, nameMap, via) {
+  let nextId = leads.length ? Math.max(...leads.map((l) => l.id)) + 1 : 1;
+  const seen = new Set();
+  const created = [];
+  for (const msg of messages) {
+    if (!msg.key?.fromMe || !msg.message) continue;
+    if (!isOutreachOpener(messageText(msg))) continue;
+    const phone = chatPhone(msg, lidMap);
+    if (!phone || phone.replace(/\D/g, '').length < 8) continue;
+    if (seen.has(phone) || matchLead(leads, phone)) continue;
+    seen.add(phone);
+    const lead = { id: nextId++, name: nameMap[phone] || `Lead ${phone.slice(-4)}`, phone, email: '', notes: 'auto-added from WhatsApp history backfill', status: 'contacted', sent: true, sentAt: new Date().toISOString(), assignedNumber: via, channel: 'whatsapp', created: new Date().toISOString(), replies: [], sentReplies: [], backfillLead: true };
+    leads.push(lead);
+    created.push(lead);
+  }
+  return created;
+}
+
 // Record ONE history message onto the matching lead (both directions: our sent →
 // sentReplies, theirs → replies). All chats with a lead RECONCILE onto that one
 // lead — even messages from different rep numbers — and get sorted by time, so a
@@ -858,7 +899,13 @@ async function connectNumber(numId) {
       try { lidMap = await leadLidMap(sock); } catch (e) { console.error('[lidmap] failed:', e.message); }
     }
     const touched = new Set();
+    let createdCount = 0;
     mutateLeads((leads) => {
+      // First, recover OLDER leads: outreach recipients in this history not yet in the CRM.
+      const created = createOutreachLeads(leads, messages, lidMap, contactNameMap(contacts, lidMap), numId);
+      createdCount = created.length;
+      for (const c of created) touched.add(c.id);
+      // Then record every message onto its lead (existing + newly created).
       for (const msg of messages) {
         const id = applyHistoryMessage(leads, msg, numId, lidMap); // records BOTH directions, deduped, tagged; resolves @lid via contacts
         if (id != null) touched.add(id);
@@ -870,6 +917,7 @@ async function connectNumber(numId) {
       }
     });
     if (!touched.size) return;
+    if (createdCount) console.log(`[backfill] recovered ${createdCount} NEW lead(s) from outreach history via ${numId}`);
     console.log(`[backfill] history sync recorded conversation for ${touched.size} lead(s)`);
     // Only (re)classify still-untriaged leads, so a sync NEVER disturbs statuses
     // already set (review / pipeline / closed). Leads with no inbound are skipped.
@@ -1877,5 +1925,5 @@ export {
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
   bookingToken, verifyBookingToken, bookingUrl, bookingKind, bookingSlots,
-  applyHistoryMessage, chatPhone, buildLidMap,
+  applyHistoryMessage, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
 };
