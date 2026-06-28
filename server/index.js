@@ -2027,6 +2027,21 @@ app.post('/api/leads/:id/reclassify', async (req, res) => {
   } catch (e) { return res.status(500).json({ error: 'reclassify failed: ' + e.message }); }
 });
 
+// Download the lead's stored signed agreement PDF (the one captured + validated when
+// they returned it). Served from SIGNED_DIR; file name comes from wf.signed.lastFile.
+app.get('/api/leads/:id/signed', (req, res) => {
+  const lead = readLeads().find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  const file = lead.wf?.signed?.lastFile;
+  if (!file) return res.status(404).json({ error: 'no signed agreement on file for this lead' });
+  const safe = String(file).replace(/[^\w.\-]/g, ''); // we set this name, but stay safe vs traversal
+  const p = join(SIGNED_DIR, safe);
+  if (!existsSync(p)) return res.status(404).json({ error: 'signed file missing on disk' });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${(lead.name || 'agreement').replace(/[^\w.\-]/g, '_')}-signed.pdf"`);
+  res.send(readFileSync(p));
+});
+
 // ── Telegram bot (long-poll) — ban-free channel for engaged leads ───────────────
 const TG_TOKEN = process.env.TELEGRAM_TOKEN || '';
 let tgState = TG_TOKEN ? 'starting' : 'off';

@@ -130,11 +130,12 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
           <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} className="self-start text-xs text-purple-300 hover:text-purple-200 border border-purple-900/50 rounded-lg px-2.5 py-1 disabled:opacity-50">{suggesting === l.id ? 'Generating…' : '✨ Suggest a reply'}</button>
         )}
 
-        {/* Agreement: show signed-validation result */}
-        {l.status === 'agreement' && l.wf?.signed && (() => { const r = l.wf.signed.result; return (
-          <div className={`text-xs rounded-lg px-2 py-1.5 border ${r?.complete ? 'border-green-700 bg-green-950/30 text-green-300' : 'border-amber-800 bg-amber-950/20 text-amber-300'}`}>
-            {r?.complete ? '✓ Signed & complete' : `⚠ Incomplete — missing ${r?.missing?.length ?? 0}`}
-            {!r?.complete && r?.missing?.length ? <span className="block text-gray-400 mt-0.5">{r.missing.join(', ')}</span> : null}
+        {/* Agreement / signed: validation result + download the stored signed PDF */}
+        {(l.status === 'agreement' || l.status === 'signed') && l.wf?.signed && (() => { const r = l.wf.signed.result; return (
+          <div className={`text-xs rounded-lg px-2 py-1.5 border ${r?.complete || l.status === 'signed' ? 'border-green-700 bg-green-950/30 text-green-300' : 'border-amber-800 bg-amber-950/20 text-amber-300'}`}>
+            {l.status === 'signed' ? '✓ Signed' : r?.complete ? '✓ Signed & complete' : `⚠ Incomplete — missing ${r?.missing?.length ?? 0}`}
+            {l.status !== 'signed' && !r?.complete && r?.missing?.length ? <span className="block text-gray-400 mt-0.5">{r.missing.join(', ')}</span> : null}
+            {l.wf.signed.lastFile ? <a href={`${API}/leads/${l.id}/signed`} target="_blank" rel="noopener noreferrer" className="block mt-1 text-cyan-300 hover:text-cyan-200 underline">📄 Download signed agreement</a> : null}
           </div>
         ); })()}
 

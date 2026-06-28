@@ -382,6 +382,9 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEdit(null)}>
           <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold text-gray-100 mb-5">Edit lead</h2>
+            {(edit as Lead & { wf?: { signed?: { lastFile?: string } } }).wf?.signed?.lastFile && (
+              <a href={`${API}/leads/${edit.id}/signed`} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 mb-4 text-sm text-cyan-300 hover:text-cyan-200 border border-cyan-900/50 rounded-lg px-3 py-2">📄 Download signed agreement</a>
+            )}
             <div className="flex flex-col gap-4">
               {([['Name', 'name'], ['Phone', 'phone'], ['Email', 'email'], ['Adviser', 'adviser'], ['Notes', 'notes']] as const).map(([label, key]) => (
                 <div key={key} className="flex flex-col gap-1">
