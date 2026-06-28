@@ -84,7 +84,7 @@
     "adviser": "",
     "created": "2026-06-07T00:00:00.000Z",
     "sent": true,
-    "sentAt": "2026-06-07T01:00:00.000Z",
+    "sentAt": "2026-06-20T01:00:00.000Z",
     "channel": "whatsapp",
     "needsReply": true,
     "replies": [
@@ -93,7 +93,8 @@
         "timestamp": "2026-06-08T03:00:00.000Z"
       }
     ],
-    "status": "question"
+    "status": "question",
+    "assignedNumber": "n1"
   },
   {
     "id": 10,
@@ -218,7 +219,8 @@
       "suggested_reply": "",
       "classifiedAt": "2026-06-11T03:01:00.000Z"
     },
-    "status": "question"
+    "status": "question",
+    "assignedNumber": "n2"
   },
   {
     "id": 17,

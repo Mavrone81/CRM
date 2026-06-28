@@ -5,7 +5,7 @@ import type { Lead, WaNumber } from './types';
 import type { Status } from './status';
 import { ALL_STATUSES, STATUS_META } from './status';
 import { relTime, lastContactOf, lastReplyOf } from './types';
-import { API, logReply, setStatus, updateLead } from './leadApi';
+import { API, logReply, sendReply, setStatus, updateLead } from './leadApi';
 import { COUNTRY_CODES, phoneParts } from './countryCodes';
 
 const GROUPS: { key: string; label: string }[] = [
@@ -55,6 +55,7 @@ function parseCSV(text: string): ImportRow[] {
 
 export default function Directory({ leads, numbers, showToast, refresh }: { leads: Lead[]; numbers: WaNumber[]; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
   const [search, setSearch] = useState('');
+  const [agentFilter, setAgentFilter] = useState('all');
   const [group, setGroup] = useState('all');
   const [statusFilter, setStatusFilter] = useState<Status | 'all'>('all');
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 }>({ key: 'status', dir: 1 });
@@ -66,6 +67,8 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
   const [replyFor, setReplyFor] = useState<number | null>(null);
   const [replyText, setReplyText] = useState('');
   const [convoFor, setConvoFor] = useState<number | null>(null);
+  const [chatDraft, setChatDraft] = useState<Record<number, string>>({}); // editable suggested reply in the chat dropdown
+  const [suggesting, setSuggesting] = useState<number | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', notes: '', adviser: '', cc: '65' });
   const [saving, setSaving] = useState(false);
@@ -116,13 +119,15 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
     if (ok && (data.id || data.ok !== false)) { showToast('Lead updated'); setEdit(null); refresh(); } else showToast(data.error || 'Update failed', false);
   };
 
+  const repName = (id?: string) => { const n = numbers.find((x) => x.id === id); return n?.repName || n?.label || ''; };
   const visible = leads.filter((l) => {
     const s = (l.status || 'new') as Status;
     const matchGroup = group === 'all' || STATUS_META[s]?.group === group;
     const matchStatus = statusFilter === 'all' || s === statusFilter;
+    const matchAgent = agentFilter === 'all' || (agentFilter === '__none__' ? !l.assignedNumber : l.assignedNumber === agentFilter);
     const q = search.toLowerCase();
     const matchSearch = !q || l.name.toLowerCase().includes(q) || l.phone.includes(search) || (l.email || '').toLowerCase().includes(q);
-    return matchGroup && matchStatus && matchSearch;
+    return matchGroup && matchStatus && matchAgent && matchSearch;
   });
 
   const sortVal = (l: Lead): string | number => {
@@ -136,6 +141,20 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
   const change = async (id: number, status: Status) => {
     const { ok, data } = await setStatus(id, status);
     if (ok && data.ok) { showToast('Status updated'); refresh(); } else showToast(data.error || 'Failed', false);
+  };
+  const suggestChat = async (id: number) => {
+    setSuggesting(id);
+    try {
+      const r = await fetch(`${API}/leads/${id}/suggest`, { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.suggested_reply) { setChatDraft((p) => ({ ...p, [id]: d.suggested_reply })); showToast('Suggested'); refresh(); }
+      else showToast(d.error || 'Could not suggest', false);
+    } catch { showToast('Network error', false); } finally { setSuggesting(null); }
+  };
+  const sendChat = async (id: number, text: string) => {
+    if (!text.trim()) return;
+    const { ok, data } = await sendReply(id, text);
+    if (ok && data.ok !== false) { showToast('Sent'); refresh(); } else showToast(data.error || 'Send failed', false);
   };
 
   // Live duplicate check against loaded leads (same phone last-8, or same name).
@@ -172,6 +191,11 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
     <div className="flex-1 flex flex-col min-h-0">
       <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 flex flex-wrap items-center gap-2 sm:gap-3">
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, phone, email…" className="w-full sm:flex-1 sm:w-auto bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-green-600" />
+        <select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)} aria-label="Filter by agent" className="bg-gray-900 border border-gray-700 rounded-lg px-2 py-2 text-sm text-gray-300 focus:outline-none focus:border-green-600">
+          <option value="all">All agents</option>
+          {numbers.map((n) => <option key={n.id} value={n.id}>{n.repName || n.label}</option>)}
+          <option value="__none__">Unassigned</option>
+        </select>
         <div className="flex gap-1 bg-gray-900 border border-gray-700 rounded-lg p-1 overflow-x-auto max-w-full">
           {GROUPS.map((g) => <button key={g.key} onClick={() => { setGroup(g.key); setStatusFilter('all'); }} className={`px-3 py-1 rounded text-sm whitespace-nowrap ${group === g.key && statusFilter === 'all' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}>{g.label}</button>)}
         </div>
@@ -272,15 +296,37 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                           ...(l.replies || []).map((r) => ({ text: r.text, ts: r.timestamp, dir: 'in' as const, via: (r as { via?: string }).via })),
                           ...(l.sentReplies || []).map((r) => ({ text: r.text, ts: r.timestamp, dir: 'out' as const, via: (r as { via?: string }).via })),
                         ].sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
-                        if (!thread.length) return <div className="text-xs text-gray-600">No messages yet.</div>;
                         return (
-                          <div className="flex flex-col gap-1.5 max-h-80 overflow-auto">
-                            {thread.map((m, i) => (
-                              <div key={i} className={`max-w-[85%] break-words [overflow-wrap:anywhere] rounded-2xl px-3 py-1.5 text-sm ${m.dir === 'out' ? 'self-end bg-green-900/40 text-green-50 rounded-br-sm' : 'self-start bg-gray-800 text-gray-200 rounded-bl-sm'}`}>
-                                {m.text}
-                                <span className="block text-[10px] text-gray-500 mt-0.5">{m.dir === 'out' ? 'agent' : l.name}{m.via ? ` · ${numLabel(m.via)}` : ''} · {relTime(m.ts)}</span>
+                          <div className="flex flex-col gap-2">
+                            {thread.length === 0 ? <div className="text-xs text-gray-600">No messages yet.</div> : (
+                              <div className="flex flex-col gap-1.5 max-h-80 overflow-auto">
+                                {thread.map((m, i) => (
+                                  <div key={i} className={`max-w-[85%] break-words [overflow-wrap:anywhere] rounded-2xl px-3 py-1.5 text-sm ${m.dir === 'out' ? 'self-end bg-green-900/40 text-green-50 rounded-br-sm' : 'self-start bg-gray-800 text-gray-200 rounded-bl-sm'}`}>
+                                    {m.text}
+                                    <span className="block text-[10px] text-gray-500 mt-0.5">{m.dir === 'out' ? 'agent' : l.name}{m.via ? ` · ${numLabel(m.via)}` : ''} · {relTime(m.ts)}</span>
+                                  </div>
+                                ))}
                               </div>
-                            ))}
+                            )}
+                            {/* AI-suggested reply — editable, regenerate, send */}
+                            {(l.ai?.suggested_reply || chatDraft[l.id] !== undefined) ? (() => {
+                              const val = chatDraft[l.id] ?? l.ai?.suggested_reply ?? '';
+                              return (
+                                <div className="flex flex-col gap-1.5 bg-gray-950/70 border border-gray-800 rounded-lg p-2 max-w-2xl">
+                                  <div className="flex items-center justify-between">
+                                    <span className="text-xs text-purple-300">Suggested reply <span className="text-gray-600">· editable</span></span>
+                                    <button onClick={() => suggestChat(l.id)} disabled={suggesting === l.id} className="text-[11px] text-purple-300 hover:text-purple-200 disabled:opacity-50">{suggesting === l.id ? '…' : '✨ Regenerate'}</button>
+                                  </div>
+                                  <textarea value={val} onChange={(e) => setChatDraft((p) => ({ ...p, [l.id]: e.target.value }))} rows={3} className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 resize-none focus:outline-none focus:border-green-600" />
+                                  <div className="flex gap-2">
+                                    <button onClick={() => sendChat(l.id, val)} disabled={!val.trim()} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg">Send</button>
+                                    <button onClick={() => { navigator.clipboard.writeText(val); showToast('Copied'); }} className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1.5">Copy</button>
+                                  </div>
+                                </div>
+                              );
+                            })() : (
+                              <button onClick={() => suggestChat(l.id)} disabled={suggesting === l.id} className="self-start text-xs text-purple-300 hover:text-purple-200 border border-purple-900/50 rounded-lg px-2.5 py-1 disabled:opacity-50">{suggesting === l.id ? 'Generating…' : '✨ Suggest a reply'}</button>
+                            )}
                           </div>
                         );
                       })()}

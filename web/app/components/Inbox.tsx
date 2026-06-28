@@ -16,6 +16,7 @@ export default function Inbox({ leads, numbers = [], showToast, refresh }: { lea
   const [composeText, setComposeText] = useState('');
   const [suggesting, setSuggesting] = useState<number | null>(null);
   const [expanded, setExpanded] = useState<Set<number>>(new Set()); // cards collapsed by default; ids here are expanded
+  const [agentFilter, setAgentFilter] = useState('all');
 
   const suggest = async (id: number) => {
     setSuggesting(id);
@@ -29,6 +30,7 @@ export default function Inbox({ leads, numbers = [], showToast, refresh }: { lea
 
   const queue = leads
     .filter((l) => l.status === 'question' || l.status === 'review' || l.status === 'new' || l.status === 'contacted')
+    .filter((l) => agentFilter === 'all' || (agentFilter === '__none__' ? !l.assignedNumber : l.assignedNumber === agentFilter))
     // needs-reply first; cold (contacted, no reply) leads sink to the bottom for follow-up.
     .sort((a, b) => Number(b.needsReply) - Number(a.needsReply) || (Number(a.status === 'contacted') - Number(b.status === 'contacted')));
   const triageCount = queue.filter((l) => l.status !== 'contacted').length;
@@ -48,7 +50,12 @@ export default function Inbox({ leads, numbers = [], showToast, refresh }: { lea
       <div className="px-4 sm:px-6 py-3 sm:py-4 border-b border-gray-800 flex flex-wrap items-center gap-3">
         <h2 className="text-base sm:text-lg font-semibold text-gray-100">Action Inbox</h2>
         <span className="text-xs sm:text-sm text-gray-500">{triageCount} need a decision{coldCount ? ` · ${coldCount} cold to follow up` : ''}</span>
-        {queue.length > 0 && <button onClick={() => setExpanded(allExpanded ? new Set() : new Set(queue.map((l) => l.id)))} className="ml-auto text-xs text-gray-400 hover:text-gray-200 border border-gray-700 rounded-lg px-2.5 py-1">{allExpanded ? 'Collapse all' : 'Expand all'}</button>}
+        <select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)} aria-label="Filter by agent" className="ml-auto text-xs bg-gray-900 border border-gray-700 rounded-lg px-2 py-1 text-gray-300 focus:outline-none focus:border-green-600">
+          <option value="all">All agents</option>
+          {numbers.map((n) => <option key={n.id} value={n.id}>{n.repName || n.label}</option>)}
+          <option value="__none__">Unassigned</option>
+        </select>
+        {queue.length > 0 && <button onClick={() => setExpanded(allExpanded ? new Set() : new Set(queue.map((l) => l.id)))} className="text-xs text-gray-400 hover:text-gray-200 border border-gray-700 rounded-lg px-2.5 py-1">{allExpanded ? 'Collapse all' : 'Expand all'}</button>}
       </div>
       <div className="flex-1 overflow-auto p-4 sm:p-6 flex flex-col gap-3">
         {queue.length === 0 && <div className="text-center text-gray-600 py-16">Nothing to triage — all replies have been actioned. 🎉</div>}
