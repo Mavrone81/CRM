@@ -6,7 +6,7 @@ import type { Status } from './status';
 import { PIPELINE_ORDER, STATUS_META } from './status';
 import { sessionDisplay, relTime, lastContactOf, lastReplyOf } from './types';
 import { fmtPhone } from './countryCodes';
-import { API, setStatus, logReply, sendReply, sendAgreement } from './leadApi';
+import { API, setStatus, logReply, sendReply, sendAgreement, reclassify } from './leadApi';
 
 // Tabs across the pipeline. Some statuses need a session pick to advance.
 const TABS: { key: Status; hint: string }[] = [
@@ -54,6 +54,14 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
     mark(id, true);
     try { const { ok, data } = await fn(); if (ok && data.ok !== false) { showToast(msg); refresh(); } else showToast(data.error || 'Failed', false); }
     catch { showToast('Network error', false); } finally { mark(id, false); }
+  };
+  const reclassifyLead = async (id: number, name: string) => {
+    mark(id, true);
+    try {
+      const { ok, data } = await reclassify(id) as { ok: boolean; data: { moved?: boolean; from?: string; to?: string; reason?: string; error?: string } };
+      if (ok) { showToast(data.moved ? `${name}: ${data.from} → ${data.to}` : `${name}: no change — ${data.reason || 'status looks right'}`); refresh(); }
+      else showToast(data.error || 'Failed', false);
+    } catch { showToast('Network error', false); } finally { mark(id, false); }
   };
   const suggest = async (id: number) => {
     setSuggesting(id);
@@ -151,6 +159,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
             className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">{b ? '…' : next.label}</button>}
           {l.channel === 'telegram' && <button onClick={() => { setSendFor(sendFor === l.id ? null : l.id); setSendText(l.ai?.suggested_reply || ''); }} className="text-xs text-sky-400 hover:text-sky-300 px-2 py-1.5 font-medium">Reply ✈</button>}
           <button onClick={() => { setReplyFor(replyFor === l.id ? null : l.id); setReplyText(''); }} className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1.5">Log reply</button>
+          <button onClick={() => reclassifyLead(l.id, l.name)} disabled={b} title="Ask the bot to re-read the chat and update the stage" className="text-xs text-purple-300 hover:text-purple-200 px-2 py-1.5 disabled:opacity-50">🔄 Re-classify</button>
           <select value="" onChange={(e) => { if (e.target.value) act(l.id, () => setStatus(l.id, e.target.value as Status), `Moved ${l.name}`); }}
             className="text-[11px] text-gray-500 bg-transparent border-0 focus:outline-none cursor-pointer ml-auto">
             <option value="">Move ▾</option>

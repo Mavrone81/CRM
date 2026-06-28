@@ -26,6 +26,10 @@ test.describe('pipeline — suggested reply (Send / Regenerate / Suggest)', () =
     // Send -> the fake socket swallows it and the toast names the lead.
     await card.getByRole('button', { name: 'Send', exact: true }).click();
     await expect(page.getByText('Sent to Ivy Suggested')).toBeVisible();
+
+    // Re-classify -> bot re-reads the chat (no AI in test = no move) and toasts the result.
+    await card.getByRole('button', { name: /Re-classify/ }).click();
+    await expect(page.getByText(/Ivy Suggested: (no change|interested|confirmed|attended)/)).toBeVisible();
   });
 
   test('a card WITHOUT a suggestion can generate one', async ({ page }) => {

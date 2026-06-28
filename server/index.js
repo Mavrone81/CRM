@@ -1987,6 +1987,24 @@ app.post('/api/leads/:id/suggest', async (req, res) => {
   } catch (e) { return res.status(500).json({ error: 'suggest failed: ' + e.message }); }
 });
 
+// On-demand re-classification: the bot re-reads the whole conversation and moves the
+// lead to the best-fit stage (forward-only, gated stages protected — same rules as the
+// automatic inbound re-classify). For when a rep feels a status is stale/wrong.
+app.post('/api/leads/:id/reclassify', async (req, res) => {
+  const leads = readLeads();
+  const lead = leads.find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  if (!lead.replies?.length) return res.json({ ok: true, from: lead.status, to: lead.status, moved: false, reason: 'No conversation to classify yet.' });
+  const st = lead.status || deriveStatus(lead);
+  try {
+    const sc = await classifyStage(lead.name, lead.replies, st, repNameFor(lead));
+    const mv = applyStageMove(st, sc);
+    mutateLeads((ls) => { const t = ls.find((l) => l.id === lead.id); if (!t) return; t.ai = { ...(t.ai || {}), reason: sc.reason || t.ai?.reason, suggested_reply: sc.suggested_reply || t.ai?.suggested_reply || '', stage: sc.status, classifiedAt: new Date().toISOString() }; if (mv) t.status = mv; });
+    if (mv) console.log(`[reclassify] ${lead.name}: ${st} -> ${mv} (${sc.confidence})`);
+    return res.json({ ok: true, from: st, to: mv || st, moved: !!mv, reason: sc.reason, confidence: sc.confidence });
+  } catch (e) { return res.status(500).json({ error: 'reclassify failed: ' + e.message }); }
+});
+
 // ── Telegram bot (long-poll) — ban-free channel for engaged leads ───────────────
 const TG_TOKEN = process.env.TELEGRAM_TOKEN || '';
 let tgState = TG_TOKEN ? 'starting' : 'off';

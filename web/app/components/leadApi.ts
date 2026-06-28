@@ -31,6 +31,10 @@ export const sendReply = (id: number, text: string) => post(`/leads/${id}/send`,
 // step so the attachment actually goes out.
 export const sendAgreement = (id: number) => post(`/wf/agreement/${id}`);
 
+// Ask the bot to re-read the conversation and move the lead to the best-fit stage
+// (forward-only, gated stages protected). Returns { from, to, moved, reason }.
+export const reclassify = (id: number) => post(`/leads/${id}/reclassify`);
+
 // Edit lead fields (name, phone, email, notes, adviser, assignedNumber…).
 export async function updateLead(id: number, fields: Record<string, unknown>) {
   const r = await fetch(`${API}/leads/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });

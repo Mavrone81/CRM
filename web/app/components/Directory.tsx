@@ -5,7 +5,7 @@ import type { Lead, WaNumber } from './types';
 import type { Status } from './status';
 import { ALL_STATUSES, STATUS_META } from './status';
 import { relTime, lastContactOf, lastReplyOf } from './types';
-import { API, logReply, sendReply, setStatus, updateLead } from './leadApi';
+import { API, logReply, sendReply, setStatus, updateLead, reclassify } from './leadApi';
 import { COUNTRY_CODES, phoneParts } from './countryCodes';
 
 const GROUPS: { key: string; label: string }[] = [
@@ -156,6 +156,11 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
     const { ok, data } = await sendReply(id, text);
     if (ok && data.ok !== false) { showToast('Sent'); refresh(); } else showToast(data.error || 'Send failed', false);
   };
+  const reclassifyLead = async (id: number, name: string) => {
+    const { ok, data } = await reclassify(id) as { ok: boolean; data: { moved?: boolean; from?: string; to?: string; reason?: string; error?: string } };
+    if (ok) { showToast(data.moved ? `${name}: ${data.from} → ${data.to}` : `${name}: no change — ${data.reason || 'looks right'}`); refresh(); }
+    else showToast(data.error || 'Failed', false);
+  };
 
   // Live duplicate check against loaded leads (same phone last-8, or same name).
   const addDup = (() => {
@@ -276,6 +281,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                     </td>
                     <td className="px-3 sm:px-4 py-3 text-right whitespace-nowrap">
                       <button onClick={() => setConvoFor(convoFor === l.id ? null : l.id)} className="text-xs text-gray-400 hover:text-gray-200 mr-3">{convoFor === l.id ? '▾ Chat' : '▸ Chat'}</button>
+                      <button onClick={() => reclassifyLead(l.id, l.name)} title="Bot re-reads the chat and updates the stage" className="text-xs text-purple-300 hover:text-purple-200 mr-3">🔄</button>
                       <button onClick={() => openEdit(l)} className="text-xs text-gray-400 hover:text-gray-200 mr-3">Edit</button>
                       <button onClick={() => { setReplyFor(replyFor === l.id ? null : l.id); setReplyText(''); }} className="text-xs text-gray-400 hover:text-gray-200 mr-3">Log reply</button>
                       <button onClick={async () => { if (!confirm(`Confirm remove? ${l.name} will be permanently deleted.`)) return; const r = await fetch(`${API}/leads/${l.id}`, { method: 'DELETE' }); if (r.ok) { showToast('Lead removed'); refresh(); } else showToast('Remove failed', false); }} className="text-xs text-red-500 hover:text-red-400">Remove</button>
