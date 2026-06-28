@@ -496,23 +496,45 @@ const SIGNED_SCHEMA = {
   additionalProperties: false,
 };
 
+// Drop any field the model returned that isn't an EXACT required field (so a stray
+// "Company signature"/"Date of agreement" can't block a lead) and recompute complete.
+function sanitizeSignedResult(r, fields) {
+  if (!r || typeof r !== 'object') return r;
+  if ((fields || []).length && Array.isArray(r.missing)) {
+    r.missing = r.missing.filter((m) => fields.includes(m));
+    r.complete = !!r.signed && r.missing.length === 0;
+  }
+  return r;
+}
 async function validateSignedAgreement(name, pdfBase64, requiredFields) {
   if (!anthropic) return { signed: false, missing: ['(AI validation unavailable — manual review needed)'], complete: false, notes: 'No ANTHROPIC_API_KEY' };
-  const fieldList = (requiredFields || []).map((f) => `- ${f}`).join('\n');
-  const system = `You verify a signed "Associate Agreement" PDF. For each REQUIRED field, decide if it is filled in (handwritten or typed value present). Also check whether the Associate's signature is present on the signature page. complete=true ONLY if the signature is present AND no required fields are missing. Be practical and do not invent missing fields.`;
+  const fields = requiredFields || [];
+  const fieldList = fields.map((f) => `- ${f}`).join('\n');
+  // Constrain `missing` to the EXACT required-fields list so the AI cannot invent
+  // off-list items (e.g. a company counter-signature, which is OUR job, not the lead's).
+  const schema = JSON.parse(JSON.stringify(SIGNED_SCHEMA));
+  if (fields.length) schema.properties.missing.items.enum = fields;
+  const system = `You verify a signed "Associate Agreement" PDF filled in by the APPLICANT.
+
+STRICT RULES:
+- Evaluate ONLY the exact fields in the "Required fields" list. For each, decide if the APPLICANT filled it in (handwritten or typed value present).
+- "missing" MUST contain only items copied VERBATIM from that list. NEVER add anything that is not on the list — do NOT flag a company/employer counter-signature, "Date of agreement", witness, or any field not listed (those are our responsibility, not the applicant's).
+- Also check the Associate's OWN signature is present on the signature page (do not require any company signature).
+- complete=true ONLY if the Associate's signature is present AND none of the listed required fields are missing.
+- Be practical; minor formatting is fine.`;
   try {
     const res = await anthropic.messages.create({
       model: AI_MODEL,
       max_tokens: 512,
       system,
-      output_config: { format: { type: 'json_schema', schema: SIGNED_SCHEMA } },
+      output_config: { format: { type: 'json_schema', schema } },
       messages: [{ role: 'user', content: [
         { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 } },
-        { type: 'text', text: `Applicant: ${name}\nRequired fields:\n${fieldList}\n\nReview the attached signed agreement and report completeness.` },
+        { type: 'text', text: `Applicant: ${name}\nRequired fields (the ONLY fields to check):\n${fieldList}\n\nReview the attached signed agreement and report completeness.` },
       ] }],
     });
     const text = res.content.find((b) => b.type === 'text')?.text || '{}';
-    return JSON.parse(text);
+    return sanitizeSignedResult(JSON.parse(text), fields);
   } catch (err) {
     console.error('[ai] signed validation failed:', err.message);
     return { signed: false, missing: ['(validation error — manual review needed)'], complete: false, notes: err.message };
@@ -2120,7 +2142,7 @@ if (BOOT) {
 // with NODE_ENV=test yields these without booting WhatsApp/Telegram/the listener.
 export {
   app, conns,
-  deriveStatus, statusFromCategory, normalisePhone, canonPhone, toJid, isOptOut, isDecline, applyStageMove,
+  sanitizeSignedResult, deriveStatus, statusFromCategory, normalisePhone, canonPhone, toJid, isOptOut, isDecline, applyStageMove,
   spin, buildMessage, buildFollowup, senderPhoneOf, matchLead, messageText, warmCap, sentTodayFor,
   inSendWindow, classifyKeyword, attendKeyword, readLeads, saveLeads, mutateLeads,
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
