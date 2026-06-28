@@ -295,6 +295,74 @@ Classify their response and draft the reply to send back. For the reply: ${hint}
   }
 }
 
+// ── Pipeline stage re-classifier ────────────────────────────────────────────────
+// Re-evaluates where a lead sits in the pipeline from the whole conversation, on
+// every reply (auto-move at all stages). Hard-gated stages are NEVER set from text:
+// signed (needs a returned PDF), scheduled/booked (need a session), onboarded (final).
+const STAGE_ORDER = ['interested', 'invited', 'confirmed', 'scheduled', 'attended', 'agreement', 'signed', 'onboarding', 'booked', 'onboarded'];
+const STAGE_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['interested', 'invited', 'confirmed', 'attended', 'agreement', 'onboarding', 'declined', 'unchanged'] },
+    confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+    reason: { type: 'string' },
+    suggested_reply: { type: 'string' },
+  },
+  required: ['status', 'confidence', 'reason', 'suggested_reply'],
+  additionalProperties: false,
+};
+// Decide the new status to apply from a stage classification — FORWARD-only (or
+// declined), never a text-gated stage. Returns the new status, or null for no change.
+function applyStageMove(currentStatus, sc) {
+  if (!sc || sc.confidence === 'low') return null;
+  const s = sc.status;
+  if (!s || s === 'unchanged') return null;
+  if (s === 'declined') return currentStatus === 'declined' ? null : 'declined';
+  const GATED = new Set(['signed', 'scheduled', 'booked', 'onboarded', 'opted_out', 'new', 'contacted', 'question', 'review']);
+  if (GATED.has(s)) return null;
+  const cur = STAGE_ORDER.indexOf(currentStatus), nxt = STAGE_ORDER.indexOf(s);
+  return nxt > cur ? s : null; // forward only
+}
+async function classifyStage(name, replies, currentStatus, repName = '') {
+  if (!anthropic) return { status: 'unchanged', confidence: 'low', reason: 'no API key', suggested_reply: '' };
+  const cfg = readConfig();
+  const transcript = replies.map((r) => `- ${r.text}`).join('\n');
+  const system = `You track where a recruitment lead sits in this pipeline and update their stage from the conversation.
+
+PIPELINE (in order): interested → invited (briefing invite sent) → confirmed (they confirmed they'll attend the FIRST/intro briefing) → attended (they ATTENDED the intro briefing) → agreement (the associate agreement has been sent to them) → onboarding (they've signed and are invited to the SECOND/onboarding briefing for joined members).
+
+The lead is CURRENTLY at: "${currentStatus}".
+
+Pick the stage that NOW best reflects reality from the conversation:
+- Move them ONLY if clearly indicated; otherwise return "unchanged".
+- "I already attended", "after the intro briefing" → attended.
+- Mentions the SECOND briefing, onboarding, or sessions "for onboard/joined members" → onboarding.
+- Clear withdrawal → declined.
+- NEVER return "signed" — that's confirmed only by a returned document, not by text; use "agreement" or "onboarding".
+- Prefer forward progress; never move backward unless they clearly withdrew.
+
+Also draft a SHORT, warm, human reply to send next (grounded only in the knowledge below; never invent prices/dates; offer only the real sessions).
+=== SESSIONS ===
+BRIEFING (1st): ${fmtSessions(cfg.sessions) || '(none yet)'}
+ONBOARDING (2nd): ${fmtSessions(cfg.onboardingSessions) || '(none yet)'}
+=== KNOWLEDGE ===
+${KNOWLEDGE}
+=== END ===`;
+  const prompt = `Lead: ${name}${repName ? ` (you are ${repName})` : ''}\nConversation:\n${transcript}\n\nReturn the best-fit stage now (or "unchanged"), confidence, a one-line reason, and a suggested reply.`;
+  try {
+    const res = await anthropic.messages.create({
+      model: AI_MODEL, max_tokens: 1024, temperature: 0.4,
+      system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+      output_config: { format: { type: 'json_schema', schema: STAGE_SCHEMA } },
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return JSON.parse(res.content.find((b) => b.type === 'text')?.text || '{}');
+  } catch (err) {
+    console.error('[ai] classifyStage failed:', err.message);
+    return { status: 'unchanged', confidence: 'low', reason: 'error', suggested_reply: '' };
+  }
+}
+
 // ── Attendance classifier ───────────────────────────────────────────────────────
 // Runs on replies AFTER a brief invite has been sent. Decides whether the contact
 // confirmed they'll attend the briefing, declined, or it's still unclear.
@@ -1119,8 +1187,15 @@ async function connectNumber(numId) {
           mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.status = 'booked'; t.wf = { ...(t.wf || {}), onboardingSession: r.sessionId, onboardingSlottedAt: now() }; } });
           console.log(`[onboarding] ${target.name} picked ${r.sessionId} -> booked`);
         }
+      } else {
+        // Any other pipeline stage (interested/confirmed/scheduled/attended/signed/booked):
+        // re-evaluate from the whole conversation and auto-move FORWARD when the reply
+        // clearly indicates progression (e.g. "I already attended", "second briefing").
+        const sc = await classifyStage(target.name, target.replies, st, repNameFor(target));
+        const mv = applyStageMove(st, sc);
+        mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (!t) return; t.ai = { ...(t.ai || {}), reason: sc.reason || t.ai?.reason, suggested_reply: sc.suggested_reply || t.ai?.suggested_reply || '', stage: sc.status, classifiedAt: now() }; if (mv) t.status = mv; });
+        if (mv) console.log(`[stage] ${target.name}: ${st} -> ${mv} (${sc.confidence})`);
       }
-      // else: reply already captured atomically; nothing more to write.
     }
   });
 
@@ -2027,7 +2102,7 @@ if (BOOT) {
 // with NODE_ENV=test yields these without booting WhatsApp/Telegram/the listener.
 export {
   app, conns,
-  deriveStatus, statusFromCategory, normalisePhone, canonPhone, toJid, isOptOut, isDecline,
+  deriveStatus, statusFromCategory, normalisePhone, canonPhone, toJid, isOptOut, isDecline, applyStageMove,
   spin, buildMessage, buildFollowup, senderPhoneOf, matchLead, messageText, warmCap, sentTodayFor,
   inSendWindow, classifyKeyword, attendKeyword, readLeads, saveLeads, mutateLeads,
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
