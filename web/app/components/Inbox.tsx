@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import type { Lead } from './types';
-import { relTime } from './types';
+import { relTime, lastContactOf, lastReplyOf } from './types';
 import { fmtPhone } from './countryCodes';
 import { logReply, sendReply, setStatus } from './leadApi';
 
@@ -69,6 +69,7 @@ export default function Inbox({ leads, showToast, refresh }: { leads: Lead[]; sh
                 {l.needsReply && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new</span>}
                 <button onClick={() => setExpanded((e) => { const n = new Set(e); if (n.has(l.id)) n.delete(l.id); else n.add(l.id); return n; })} className="ml-auto text-gray-500 hover:text-gray-200 text-xs whitespace-nowrap px-1" title={isCol ? 'Expand' : 'Collapse'}>{isCol ? '▸ expand' : '▾ collapse'}</button>
               </div>
+              <div className="text-[11px] text-gray-500">Last follow-up: <span className="text-gray-400">{relTime(lastContactOf(l)) || 'never'}</span>{lastReplyOf(l) ? <> · replied <span className="text-gray-400">{relTime(lastReplyOf(l))}</span></> : ''}</div>
               {isCol ? (
                 lastMsg ? <p className="text-xs text-gray-500 truncate">{lastMsg.dir === 'out' ? 'You: ' : ''}{lastMsg.text}</p> : null
               ) : (<>
