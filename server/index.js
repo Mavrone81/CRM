@@ -45,6 +45,23 @@ function decStr(raw) {
   d.setAuthTag(b.subarray(12, 28));
   return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8');
 }
+// Binary at-rest encryption for stored files (e.g. signed-agreement PDFs, which carry
+// PII). Format: ['ENC1'][iv 12][tag 16][ciphertext]. Reads auto-detect plaintext.
+const ENC_MAGIC = Buffer.from('ENC1');
+function encBuf(buf) {
+  if (!DATA_KEY) return buf;
+  const iv = randomBytes(12);
+  const c = createCipheriv('aes-256-gcm', DATA_KEY, iv);
+  const enc = Buffer.concat([c.update(buf), c.final()]);
+  return Buffer.concat([ENC_MAGIC, iv, c.getAuthTag(), enc]);
+}
+function decBuf(buf) {
+  if (!buf || buf.length < 4 || !buf.subarray(0, 4).equals(ENC_MAGIC)) return buf; // plaintext (pre-migration)
+  if (!DATA_KEY) throw new Error('DATA_KEY is required to read encrypted files');
+  const d = createDecipheriv('aes-256-gcm', DATA_KEY, buf.subarray(4, 16));
+  d.setAuthTag(buf.subarray(16, 32));
+  return Buffer.concat([d.update(buf.subarray(32)), d.final()]);
+}
 // Data dir is env-overridable so tests can point at an isolated temp dir.
 const DATA_DIR = process.env.WATAPP_DATA_DIR || join(__dirname, 'data');
 // Under test we import this module for its exports without booting WhatsApp,
@@ -1190,7 +1207,7 @@ async function connectNumber(numId) {
           try {
             const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage });
             const fname = `${target.id}-${Date.now()}.pdf`;
-            writeFileSync(join(SIGNED_DIR, fname), buffer);
+            writeFileSync(join(SIGNED_DIR, fname), encBuf(buffer)); // encrypted at rest (PII)
             const result = await validateSignedAgreement(target.name, buffer.toString('base64'), cfg.requiredFields);
             mutateLeads((ls) => {
               const t2 = ls.find((l) => l.id === target.id);
@@ -2039,7 +2056,7 @@ app.get('/api/leads/:id/signed', (req, res) => {
   if (!existsSync(p)) return res.status(404).json({ error: 'signed file missing on disk' });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${(lead.name || 'agreement').replace(/[^\w.\-]/g, '_')}-signed.pdf"`);
-  res.send(readFileSync(p));
+  res.send(decBuf(readFileSync(p))); // decrypt at-rest PDF (handles legacy plaintext too)
 });
 
 // ── Telegram bot (long-poll) — ban-free channel for engaged leads ───────────────
@@ -2143,6 +2160,17 @@ function migrateEncryption() {
       console.log(`[encrypt] migrated ${p.split('/').pop()} → encrypted at rest`);
     } catch (e) { console.error(`[encrypt] migrate ${p} failed:`, e.message); }
   }
+  // Encrypt any existing plaintext signed-agreement PDFs (PII) in place.
+  try {
+    let n = 0;
+    for (const f of readdirSync(SIGNED_DIR)) {
+      const p = join(SIGNED_DIR, f);
+      const buf = readFileSync(p);
+      if (buf.length >= 4 && buf.subarray(0, 4).equals(ENC_MAGIC)) continue; // already encrypted
+      writeFileSync(p, encBuf(buf)); n++;
+    }
+    if (n) console.log(`[encrypt] migrated ${n} signed PDF(s) → encrypted at rest`);
+  } catch (e) { console.error('[encrypt] signed-PDF migrate failed:', e.message); }
 }
 
 if (BOOT) {
@@ -2163,5 +2191,5 @@ export {
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
   bookingToken, verifyBookingToken, bookingUrl, bookingKind, bookingSlots,
-  encStr, decStr, applyHistoryMessage, applyOwnSend, isNewRepTakeover, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
+  encStr, decStr, encBuf, decBuf, applyHistoryMessage, applyOwnSend, isNewRepTakeover, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
 };
