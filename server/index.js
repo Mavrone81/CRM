@@ -628,6 +628,13 @@ function isOptOut(text) {
   return /\b(unsubscribe|opt[\s-]?out|remove me|take me off|stop contacting|don'?t contact|do not contact|leave me alone|not interested at all)\b/.test(t);
 }
 
+// Clear, unambiguous decline — honoured at ANY pipeline stage (like opt-out), since
+// an explicit "not interested" is a withdrawal regardless of where the lead sits.
+function isDecline(text) {
+  const t = (text || '').toLowerCase();
+  return /\b(not interested|no longer interested|not keen|no thanks|no thank you|not for me|changed my mind|won'?t be (joining|proceeding)|gonna pass|i'?ll pass|withdraw)\b/.test(t);
+}
+
 // ── Sequenced bulk outreach (paced, cap-aware, auto-failover) ───────────────────
 const outreach = { running: false, queue: [], sent: 0, failed: 0, startedAt: null };
 async function outreachTick() {
@@ -1071,6 +1078,10 @@ async function connectNumber(numId) {
       // Opt-out: they asked us to stop — flag and never message again. (Reply was
       // already captured atomically above; just apply the status change.)
       if (isOptOut(text)) { mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.status = 'opted_out'; t.needsReply = false; } }); console.log(`[optout] ${target.name} opted out`); continue; }
+
+      // Explicit decline at ANY active stage → declined (a withdrawal, like opt-out).
+      // This covers pipeline leads the status-gated classifier below would otherwise skip.
+      if (isDecline(text) && !['declined', 'opted_out'].includes(st)) { mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) t.status = 'declined'; }); console.log(`[decline] ${target.name}: "${text.slice(0, 40)}" -> declined`); continue; }
 
       // MANUAL-SEND MODE: classify + advance status (read-only) only. Never auto-send.
       // Slow AI runs OUTSIDE the write; the result is applied via mutateLeads (which
@@ -1827,9 +1838,15 @@ app.post('/api/leads/:id/reply', async (req, res) => {
   lead.needsReply = true;
   saveLeads(leads);
   const st = lead.status || deriveStatus(lead);
+  // Explicit decline at any active stage → declined (honoured everywhere, like opt-out).
+  if (isDecline(text) && !['declined', 'opted_out'].includes(st) && req.body.classify !== false) {
+    const fresh = readLeads();
+    const t = fresh.find((l) => l.id === lead.id);
+    if (t) { t.status = 'declined'; saveLeads(fresh); return res.json({ ok: true, lead: t }); }
+  }
   if (['new', 'contacted', 'question', 'review'].includes(st) && req.body.classify !== false) {
     try {
-      const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead), bookingUrl(lead.id));
+      const ai = await classifyReplies(lead.name, lead.replies, repNameFor(lead), bookingUrl(lead.id), isNewRepTakeover(lead));
       const fresh = readLeads();
       const t = fresh.find((l) => l.id === lead.id);
       if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; t.status = statusFromCategory(ai.category); saveLeads(fresh); return res.json({ ok: true, lead: t }); }
@@ -2010,7 +2027,7 @@ if (BOOT) {
 // with NODE_ENV=test yields these without booting WhatsApp/Telegram/the listener.
 export {
   app, conns,
-  deriveStatus, statusFromCategory, normalisePhone, canonPhone, toJid, isOptOut,
+  deriveStatus, statusFromCategory, normalisePhone, canonPhone, toJid, isOptOut, isDecline,
   spin, buildMessage, buildFollowup, senderPhoneOf, matchLead, messageText, warmCap, sentTodayFor,
   inSendWindow, classifyKeyword, attendKeyword, readLeads, saveLeads, mutateLeads,
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
