@@ -34,7 +34,7 @@ const NEXT: Partial<Record<Status, { to: Status; label: string; contacts?: boole
   booked: { to: 'onboarded', label: 'Mark onboarded' },
 };
 
-export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[]; status: WaStatus; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
+export default function Pipeline({ leads, status, showToast, refresh }: { leads: Lead[]; status: WaStatus; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
   const [config, setConfig] = useState<Config | null>(null);
   const [active, setActive] = useState<Status>('interested');
   const [busy, setBusy] = useState<Set<number>>(new Set());
@@ -91,6 +91,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
 
   const sessionCount = (id: string) => leads.filter((l) => l.wf?.session === id && PIPELINE_ORDER.indexOf(l.status as Status) >= PIPELINE_ORDER.indexOf('scheduled')).length;
   const sessionLabelOf = (id?: string | null) => { const s = config?.sessions.find((x) => x.id === id); return s ? sessionDisplay(s) : id || '—'; };
+  const repOf = (l: Lead) => { const n = (status.numbers || []).find((x) => x.id === l.assignedNumber); return n?.repName || n?.label || ''; };
 
   const card = (l: Lead) => {
     const lr = l.replies?.[l.replies.length - 1];
@@ -102,6 +103,7 @@ export default function Pipeline({ leads, showToast, refresh }: { leads: Lead[];
           <span className="font-medium text-gray-100 text-sm">{l.name}</span>
           <span className="text-xs text-gray-500 font-mono">{fmtPhone(l.phone)}</span>
           {l.channel === 'telegram' && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-sky-950 border border-sky-800 text-sky-300">✈ TG</span>}
+          {repOf(l) && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-950 border border-purple-800 text-purple-300">👤 {repOf(l)}</span>}
           {l.needsReply && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-900 border border-blue-700 text-blue-200">new reply</span>}
         </div>
         {lr && <p className="text-xs text-gray-400 bg-gray-800/60 rounded-lg px-2 py-1.5 line-clamp-2">“{lr.text}”</p>}

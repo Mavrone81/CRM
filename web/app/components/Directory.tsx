@@ -268,7 +268,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                     </td>
                     <td className="px-3 sm:px-4 py-3 text-xs whitespace-nowrap">
                       <div className="text-gray-300 font-mono">{ph.local || '—'}</div>
-                      <div className="text-[10px] text-gray-500">{l.channel === 'telegram' ? '✈ Telegram' : `📱 ${numLabel(l.assignedNumber)}`}</div>
+                      <div className="text-[10px] text-gray-500">{l.channel === 'telegram' ? '✈ Telegram' : (repName(l.assignedNumber) ? `👤 ${repName(l.assignedNumber)}` : `📱 ${numLabel(l.assignedNumber)}`)}</div>
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell text-xs max-w-[240px]">
                       <div className="text-gray-400">contacted {relTime(lastContactOf(l)) || 'never'}{lastReplyOf(l) ? ` · replied ${relTime(lastReplyOf(l))}` : ''}</div>
