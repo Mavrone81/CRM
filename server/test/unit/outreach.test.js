@@ -36,6 +36,12 @@ describe('warmCap — warming ramp', () => {
     const future = new Date(Date.now() + 5 * DAY).toISOString();
     assert.equal(warmCap({ addedAt: future }), 10);
   });
+
+  test('a dailyCap below the warming floor is still honoured (cap 5 stays 5)', () => {
+    assert.equal(warmCap({ dailyCap: 5, addedAt: new Date().toISOString() }), 5);
+    assert.equal(warmCap({ dailyCap: 5, addedAt: new Date(Date.now() - 30 * DAY).toISOString() }), 5);
+    assert.equal(warmCap({ dailyCap: 3 }), 3);
+  });
 });
 
 describe('sentTodayFor', () => {

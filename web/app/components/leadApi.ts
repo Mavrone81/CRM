@@ -23,8 +23,16 @@ export const ackLead = (id: number) => post(`/leads/${id}/ack`);
 // Manually log an inbound reply the bot missed (auto-classifies if pre-pipeline).
 export const logReply = (id: number, text: string) => post(`/leads/${id}/reply`, { text });
 
-// Send an outbound reply (Telegram sends directly; WhatsApp returns an error in manual mode).
-export const sendReply = (id: number, text: string) => post(`/leads/${id}/send`, { text });
+// Send an outbound reply. If the number is at its daily cap, the server returns
+// cap_exceeded (409) — we prompt the user to confirm before breaching it (anti-ban).
+export async function sendReply(id: number, text: string, force = false) {
+  const r = await post(`/leads/${id}/send`, { text, force });
+  if (force || r.ok || (r.data as { error?: string })?.error !== 'cap_exceeded') return r;
+  const d = r.data as { label?: string; sentToday?: number; cap?: number };
+  const proceed = typeof window !== 'undefined' && window.confirm(`⚠️ ${d.label || 'This number'} has hit its daily cap (${d.sentToday}/${d.cap}).\n\nSending more raises the risk of a WhatsApp ban. Send anyway?`);
+  if (!proceed) return { ok: false, data: { error: 'Daily cap reached — not sent' } };
+  return post(`/leads/${id}/send`, { text, force: true });
+}
 
 // Send the associate agreement — the PDF document (not just text) via the lead's
 // own number, and advance status to 'agreement'. Use this for the attended→agreement

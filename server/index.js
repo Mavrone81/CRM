@@ -702,7 +702,9 @@ function warmCap(num) {
   const cap = num.dailyCap || DEFAULT_CAP;
   if (!num.addedAt) return cap;
   const days = Math.floor((Date.now() - new Date(num.addedAt).getTime()) / 86400000);
-  return Math.max(10, Math.min(cap, 10 + days * 10));
+  // Warming ramps 10/day toward the cap, but NEVER exceeds the configured dailyCap
+  // (so a cap below 10 is still honoured).
+  return Math.min(cap, Math.max(10, 10 + days * 10));
 }
 // How many WhatsApp messages this number has sent today (derived from leads).
 function sentTodayFor(numId, leads) {
@@ -1992,6 +1994,12 @@ app.post('/api/leads/:id/send', async (req, res) => {
   const jid = toJid(lead.phone);
   if (!jid) return res.status(400).json({ error: 'Lead has no valid phone number.' });
   const fromNum = lead.assignedNumber || (([...conns.entries()].find(([, v]) => v.sock === sock) || [])[0]);
+  // Daily-cap guardrail: block a manual send once the number is at/over its cap,
+  // unless the rep explicitly confirms (force) — anti-ban. Returns 409 cap_exceeded.
+  const cfgNum = numbersCfg().find((n) => n.id === fromNum);
+  const capN = cfgNum ? warmCap(cfgNum) : DEFAULT_CAP;
+  const sentN = sentTodayFor(fromNum, leads);
+  if (!req.body.force && sentN >= capN) return res.status(409).json({ error: 'cap_exceeded', label: cfgNum?.label || fromNum, sentToday: sentN, cap: capN });
   try {
     const sent = await sock.sendMessage(jid, { text });
     trackSent(fromNum, sent?.key);
