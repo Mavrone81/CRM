@@ -2,6 +2,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  fetchLatestWaWebVersion,
   downloadMediaMessage,
   Browsers,
 } from '@whiskeysockets/baileys';
@@ -1049,7 +1050,13 @@ async function connectNumber(numId) {
   const dir = join(__dirname, 'sessions', numId);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const { state, saveCreds } = await useMultiFileAuthState(dir);
-  const { version } = await fetchLatestBaileysVersion();
+  // Use the LIVE WhatsApp-Web version (fetched from web.whatsapp.com), not the
+  // version baked into Baileys — which goes stale when WhatsApp updates and gets
+  // every socket rejected with code 428. Fall back to the baked version if the
+  // live fetch fails.
+  let version;
+  try { ({ version } = await fetchLatestWaWebVersion({})); }
+  catch { ({ version } = await fetchLatestBaileysVersion()); }
 
   const sock = makeWASocket({
     version,
