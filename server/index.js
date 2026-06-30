@@ -1049,6 +1049,9 @@ function applyOwnSend(leads, msg, via) {
 
 // ── WhatsApp ──────────────────────────────────────────────────────────────────
 async function connectNumber(numId) {
+  // Kill-switch: WA_DISABLED stops ALL WhatsApp connection attempts (boot loop,
+  // recovery probe, reconnects, relink) — used to let things cool down during an outage.
+  if (process.env.WA_DISABLED) { const c = conns.get(numId) || {}; c.state = 'close'; c.qr = null; conns.set(numId, c); console.log(`[wa] WA_DISABLED — not connecting ${numId}`); return; }
   const label = (numbersCfg().find((n) => n.id === numId) || {}).label || numId;
   const dir = join(__dirname, 'sessions', numId);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
