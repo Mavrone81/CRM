@@ -3,6 +3,11 @@ FROM node:20-slim
 
 WORKDIR /app
 
+# proxychains-ng — route all outbound traffic via a SOCKS proxy (residential IP) at
+# the process level when PROXY_URL is set (see start.sh).
+RUN apt-get update && apt-get install -y --no-install-recommends proxychains4 \
+  && rm -rf /var/lib/apt/lists/*
+
 # Install production deps first for better layer caching
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
@@ -12,4 +17,4 @@ COPY . .
 
 ENV NODE_ENV=production
 EXPOSE 10001
-CMD ["node", "index.js"]
+CMD ["sh", "start.sh"]

@@ -16,12 +16,9 @@ import { readFileSync, writeFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { createHmac, createCipheriv, createDecipheriv, randomBytes } from 'crypto';
-import { SocksProxyAgent } from 'socks-proxy-agent';
-// Optional outbound proxy for WhatsApp sockets (e.g. a residential IP via a reverse
-// tunnel) — set PROXY_URL=socks5://host:port to route every number through it.
-const PROXY_URL = process.env.PROXY_URL || '';
-const proxyAgent = PROXY_URL ? new SocksProxyAgent(PROXY_URL) : undefined;
-if (PROXY_URL && process.env.NODE_ENV !== 'test') console.log(`[proxy] WhatsApp sockets routed via ${PROXY_URL}`);
+// Outbound proxy (residential IP via reverse tunnel) is applied at the PROCESS level
+// via proxychains in the Docker entrypoint when PROXY_URL is set — see start.sh /
+// Dockerfile. This keeps Baileys agnostic and routes ALL its traffic through the proxy.
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -1069,7 +1066,6 @@ async function connectNumber(numId) {
     auth: state,
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
-    ...(proxyAgent ? { agent: proxyAgent, fetchAgent: proxyAgent } : {}), // route via the residential proxy when PROXY_URL is set
     // Identify as a Desktop client — WhatsApp only pushes chat-history sync to
     // desktop-class clients, which the backfill needs.
     browser: Browsers.macOS('Desktop'),
