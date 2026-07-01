@@ -17,7 +17,7 @@ test.describe('inbox — cold lead follow-up', () => {
     await card.getByRole('button', { name: /expand/ }).click();
     await card.getByRole('button', { name: /Suggest a reply/ }).click();
 
-    // A suggestion is produced -> the editable box + Send appear.
-    await expect(card.getByRole('button', { name: /Send via WhatsApp/ })).toBeVisible();
+    // A suggestion is produced -> the editable box + the WhatsApp deep-link button appear.
+    await expect(card.getByRole('button', { name: /Open WhatsApp/ })).toBeVisible();
   });
 });

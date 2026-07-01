@@ -9,10 +9,10 @@ test.describe('directory — chat suggest + agent filter', () => {
     await expect(row).toBeVisible();
     await row.getByRole('button', { name: /Chat/ }).click();
 
-    // The editable suggested-reply box + Regenerate + Send appear in the dropdown.
+    // The editable suggested-reply box + Regenerate + Open WhatsApp appear in the dropdown.
     await expect(page.locator('textarea')).toBeVisible();
     await expect(page.getByRole('button', { name: /Regenerate/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Open WhatsApp/ })).toBeVisible();
   });
 
   test('agent filter shows only that agent\'s leads', async ({ page }) => {

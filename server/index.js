@@ -1773,6 +1773,19 @@ app.post('/api/documents/:id/default', (req, res) => {
   res.json({ ok: true });
 });
 
+// Download a document PDF (e.g. the agreement) so a rep can attach it manually in
+// WhatsApp — click-to-chat deep links can't carry a file. `:id` may be 'default'.
+app.get('/api/documents/:id/download', (req, res) => {
+  const docs = readDocs();
+  const d = req.params.id === 'default' ? (docs.find((x) => x.isDefault) || docs[0]) : docs.find((x) => x.id === req.params.id);
+  if (!d) return res.status(404).json({ error: 'document not found' });
+  const p = join(DOCS_DIR, d.file);
+  if (!existsSync(p)) return res.status(404).json({ error: 'file missing on disk' });
+  res.setHeader('Content-Type', d.mimetype || 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${(d.name || 'agreement.pdf').replace(/[^\w.\-]/g, '_')}"`);
+  res.send(decBuf(readFileSync(p))); // handles at-rest encryption + legacy plaintext
+});
+
 // ── Pipeline stage actions ───────────────────────────────────────────────────────
 function findLead(leads, id) { return leads.find((l) => l.id === Number(id)); }
 
@@ -1854,39 +1867,32 @@ app.post('/api/wf/attend/:id', (req, res) => {
 });
 
 // Send the agreement document(s) over WhatsApp -> stage 'agreement_sent'
-app.post('/api/wf/agreement/:id', async (req, res) => {
-  if (!anyOpen()) return res.status(503).json({ error: 'WhatsApp not connected' });
+// Mark the agreement as sent (Baileys-free). We no longer transmit the PDF via a
+// socket — the rep sends it themselves: the UI downloads the file (to attach) and
+// opens a click-to-chat deep link pre-filled with `caption`. This endpoint records
+// the send, advances to 'agreement', and returns { caption, doc } for the UI to use.
+app.post('/api/wf/agreement/:id', (req, res) => {
   const leads = readLeads();
   const lead = findLead(leads, req.params.id);
   if (!lead) return res.status(404).json({ error: 'not found' });
-  const jid = toJid(lead.phone);
-  if (!jid) return res.status(400).json({ error: 'invalid phone number' });
-  // Send from the lead's OWN sticky number so the agreement lands in the same
-  // thread the rep has been chatting in (not a random firstSock number).
-  const sock = sockForLead(lead);
-  if (!sock) return res.status(503).json({ error: 'No connected WhatsApp number available for this lead.' });
   const all = readDocs();
   let chosen = Array.isArray(req.body.fileIds) && req.body.fileIds.length
     ? all.filter((d) => req.body.fileIds.includes(d.id))
     : all.filter((d) => d.isDefault);
   if (!chosen.length) chosen = all.slice(0, 1);
-  if (!chosen.length) return res.status(400).json({ error: 'no documents available to send' });
-  try {
-    const rep = repNameFor(lead);
-    const caption = req.body.caption || `Hi ${lead.name},${rep ? ` I'm ${rep}.` : ''} Here is the associate agreement. Please review, sign, and send the signed PDF back to me here.`;
-    await sendDocumentsTo(jid, chosen, caption, sock);
-    const ts = new Date().toISOString();
-    lead.stage = 'agreement_sent';
-    lead.status = 'agreement';
-    lead.wf = { ...(lead.wf || {}), agreement: { sentAt: ts, fileIds: chosen.map((d) => d.id), fileNames: chosen.map((d) => d.name) } };
-    lead.lastContactedAt = ts;
-    if (!lead.sentReplies) lead.sentReplies = [];
-    lead.sentReplies.push({ text: caption, timestamp: ts, channel: 'whatsapp', kind: 'agreement' });
-    lead.sentReplies.push({ text: `[attached: ${chosen.map((d) => d.name).join(', ')}]`, timestamp: ts, channel: 'whatsapp', kind: 'agreement' });
-    saveLeads(leads);
-    console.log(`[wf] agreement -> ${lead.name} (${chosen.length} file/s)`);
-    res.json({ ok: true, lead });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  const rep = repNameFor(lead);
+  const caption = req.body.caption || `Hi ${lead.name},${rep ? ` I'm ${rep}.` : ''} Here is the associate agreement. Please review, sign, and send the signed PDF back to me here.`;
+  const ts = new Date().toISOString();
+  lead.stage = 'agreement_sent';
+  lead.status = 'agreement';
+  lead.wf = { ...(lead.wf || {}), agreement: { sentAt: ts, fileIds: chosen.map((d) => d.id), fileNames: chosen.map((d) => d.name) } };
+  lead.lastContactedAt = ts;
+  if (!lead.sentReplies) lead.sentReplies = [];
+  lead.sentReplies.push({ text: caption, timestamp: ts, channel: 'whatsapp', kind: 'agreement' });
+  if (chosen.length) lead.sentReplies.push({ text: `[attached: ${chosen.map((d) => d.name).join(', ')}]`, timestamp: ts, channel: 'whatsapp', kind: 'agreement' });
+  saveLeads(leads); // read → sync-mutate → save (no await between — atomic-safe)
+  console.log(`[wf] agreement marked -> ${lead.name} (${chosen.length} file/s)`);
+  res.json({ ok: true, lead, caption, doc: chosen[0] ? { id: chosen[0].id, name: chosen[0].name } : null });
 });
 
 // Assign an onboarding (2nd) session -> 'onboarding_slotted', role = potential on-board
@@ -1981,6 +1987,23 @@ app.post('/api/leads/:id/reply', async (req, res) => {
       if (t) { t.ai = { ...ai, classifiedAt: new Date().toISOString() }; t.status = statusFromCategory(ai.category); saveLeads(fresh); return res.json({ ok: true, lead: t }); }
     } catch {}
   }
+  // Pipeline lead: re-read the whole conversation and auto-move FORWARD when the reply
+  // clearly shows progression (same rules as the live inbound handler + /reclassify).
+  // This gives a manually-pasted reply the same intelligence Baileys auto-capture had.
+  if (STAGE_ORDER.includes(st) && req.body.classify !== false) {
+    try {
+      const sc = await classifyStage(lead.name, lead.replies, st, repNameFor(lead));
+      const mv = applyStageMove(st, sc);
+      const fresh = readLeads();
+      const t = fresh.find((l) => l.id === lead.id);
+      if (t) {
+        t.ai = { ...(t.ai || {}), reason: sc.reason || t.ai?.reason, suggested_reply: sc.suggested_reply || t.ai?.suggested_reply || '', stage: sc.status, classifiedAt: new Date().toISOString() };
+        if (mv) t.status = mv;
+        saveLeads(fresh);
+        return res.json({ ok: true, lead: t, moved: !!mv });
+      }
+    } catch {}
+  }
   res.json({ ok: true, lead });
 });
 
@@ -2019,6 +2042,28 @@ app.post('/api/leads/:id/send', async (req, res) => {
     mutateLeads((ls) => { const l = ls.find((x) => x.id === lead.id); if (!l) return; l.sentReplies = l.sentReplies || []; l.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'whatsapp' }); l.lastContactedAt = new Date().toISOString(); l.needsReply = false; if (!l.assignedNumber && fromNum) l.assignedNumber = fromNum; });
     return res.json({ ok: true });
   } catch (e) { return res.status(502).json({ error: 'WhatsApp send failed: ' + e.message }); }
+});
+
+// Record an outbound WhatsApp message the rep sent via a click-to-chat deep link
+// (Baileys-free manual send). Appends to the thread + bumps last-contacted exactly
+// like a real send, so the CRM stays accurate without a socket. A cold 'new' lead
+// advances to 'contacted' (the opener just went out).
+app.post('/api/leads/:id/log-sent', (req, res) => {
+  const text = (req.body.text || '').trim();
+  if (!text) return res.status(400).json({ error: 'text required' });
+  let found = false;
+  mutateLeads((ls) => {
+    const l = ls.find((x) => x.id === Number(req.params.id));
+    if (!l) return;
+    found = true;
+    l.sentReplies = l.sentReplies || [];
+    l.sentReplies.push({ text, timestamp: new Date().toISOString(), channel: 'whatsapp', ...(req.body.kind ? { kind: req.body.kind } : {}) });
+    l.lastContactedAt = new Date().toISOString();
+    l.needsReply = false;
+    if (l.status === 'new') l.status = 'contacted';
+  });
+  if (!found) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
 });
 
 // Generate a fresh, varied suggested reply for a lead (so no two are similar —

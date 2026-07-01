@@ -5,7 +5,7 @@ import type { Lead, WaNumber } from './types';
 import type { Status } from './status';
 import { ALL_STATUSES, STATUS_META } from './status';
 import { relTime, lastContactOf, lastReplyOf } from './types';
-import { API, logReply, sendReply, setStatus, updateLead, reclassify } from './leadApi';
+import { API, logReply, sendReply, setStatus, updateLead, reclassify, logSent, waLink } from './leadApi';
 import { COUNTRY_CODES, phoneParts } from './countryCodes';
 
 const GROUPS: { key: string; label: string }[] = [
@@ -151,10 +151,17 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
       else showToast(d.error || 'Could not suggest', false);
     } catch { showToast('Network error', false); } finally { setSuggesting(null); }
   };
-  const sendChat = async (id: number, text: string) => {
+  const sendChat = async (lead: Lead, text: string) => {
     if (!text.trim()) return;
-    const { ok, data } = await sendReply(id, text);
-    if (ok && data.ok !== false) { showToast('Sent'); refresh(); } else showToast(data.error || 'Send failed', false);
+    if (lead.channel === 'telegram') {
+      const { ok, data } = await sendReply(lead.id, text);
+      if (ok && data.ok !== false) { showToast('Sent'); refresh(); } else showToast(data.error || 'Send failed', false);
+      return;
+    }
+    // WhatsApp: open a click-to-chat deep link (rep sends from their own app) + record it.
+    window.open(waLink(lead.phone, text), '_blank');
+    const { ok, data } = await logSent(lead.id, text);
+    if (ok && data.ok !== false) { showToast('Opened WhatsApp'); refresh(); } else showToast(data.error || 'Failed', false);
   };
   const reclassifyLead = async (id: number, name: string) => {
     const { ok, data } = await reclassify(id) as { ok: boolean; data: { moved?: boolean; from?: string; to?: string; reason?: string; error?: string } };
@@ -325,7 +332,7 @@ export default function Directory({ leads, numbers, showToast, refresh }: { lead
                                   </div>
                                   <textarea value={val} onChange={(e) => setChatDraft((p) => ({ ...p, [l.id]: e.target.value }))} rows={3} className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 resize-none focus:outline-none focus:border-green-600" />
                                   <div className="flex gap-2">
-                                    <button onClick={() => sendChat(l.id, val)} disabled={!val.trim()} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg">Send</button>
+                                    <button onClick={() => sendChat(l, val)} disabled={!val.trim()} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg">{l.channel === 'telegram' ? 'Send' : 'Open WhatsApp'}</button>
                                     <button onClick={() => { navigator.clipboard.writeText(val); showToast('Copied'); }} className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1.5">Copy</button>
                                   </div>
                                 </div>

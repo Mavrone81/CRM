@@ -35,17 +35,21 @@ test('PATCH /api/numbers/:id sets and clears repName', async () => {
   assert.equal(nums.find((n) => n.id === 'n3').repName, '');
 });
 
+// Agreement is Baileys-free: the caption is returned (for the deep link), not sent on
+// a socket. It's still personalised with the assigned number's rep name.
 test('agreement default caption introduces the assigned number\'s rep', async () => {
   S.seedLeads([{ id: 40, name: 'Gabby', phone: '88281147', status: 'attended', assignedNumber: 'n2' }]);
   const r = await api(S.base, '/api/wf/agreement/40', { method: 'POST', body: {} }); // no caption → default
   assert.equal(r.status, 200);
-  assert.equal(S.records.length, 1);
-  assert.match(S.records[0].msg.caption, /I'm Vivian/);
+  const d = await r.json();
+  assert.equal(S.records.length, 0, 'no socket send');
+  assert.match(d.caption, /I'm Vivian/);
 });
 
 test('agreement default caption omits the intro when the rep is unset', async () => {
   S.seedLeads([{ id: 41, name: 'Sam', phone: '6591234567', status: 'attended', assignedNumber: 'n3' }]);
   const r = await api(S.base, '/api/wf/agreement/41', { method: 'POST', body: {} });
   assert.equal(r.status, 200);
-  assert.doesNotMatch(S.records[0].msg.caption, /I'm /);
+  const d = await r.json();
+  assert.doesNotMatch(d.caption, /I'm /);
 });

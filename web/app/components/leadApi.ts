@@ -23,6 +23,20 @@ export const ackLead = (id: number) => post(`/leads/${id}/ack`);
 // Manually log an inbound reply the bot missed (auto-classifies if pre-pipeline).
 export const logReply = (id: number, text: string) => post(`/leads/${id}/reply`, { text });
 
+// WhatsApp is Baileys-free: the rep sends from their own app via a click-to-chat
+// deep link (opens WhatsApp with the message pre-filled). We only RECORD the send.
+// waLink builds the link; logSent records it in the CRM thread + bumps last-contacted.
+export function waLink(phone: string, text: string) {
+  const digits = (phone || '').replace(/\D/g, '');
+  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+}
+export const logSent = (id: number, text: string, opts?: { kind?: string }) =>
+  post(`/leads/${id}/log-sent`, { text, ...opts });
+
+// Direct download URL for a stored document (default = the default agreement) so a
+// rep can attach it manually in WhatsApp — deep links can't carry a file.
+export const docDownloadUrl = (docId = 'default') => `${API}/documents/${docId}/download`;
+
 // Send an outbound reply. If the number is at its daily cap, the server returns
 // cap_exceeded (409) — we prompt the user to confirm before breaching it (anti-ban).
 export async function sendReply(id: number, text: string, force = false) {

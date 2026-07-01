@@ -6,7 +6,7 @@ import type { Status } from './status';
 import { PIPELINE_ORDER, STATUS_META } from './status';
 import { sessionDisplay, relTime, lastContactOf, lastReplyOf } from './types';
 import { fmtPhone } from './countryCodes';
-import { API, setStatus, logReply, sendReply, sendAgreement, reclassify } from './leadApi';
+import { API, setStatus, logReply, sendReply, sendAgreement, reclassify, logSent, waLink, docDownloadUrl } from './leadApi';
 
 // Tabs across the pipeline. Some statuses need a session pick to advance.
 const TABS: { key: Status; hint: string }[] = [
@@ -123,7 +123,11 @@ export default function Pipeline({ leads, status, showToast, refresh }: { leads:
             </div>
             <textarea value={val} onChange={(e) => setEditText((p) => ({ ...p, [l.id]: e.target.value }))} rows={3} className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-green-600" />
             <div className="flex gap-2">
-              <button onClick={() => act(l.id, () => sendReply(l.id, val), `Sent to ${l.name}`)} disabled={b || !val.trim()} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg">{b ? '…' : 'Send'}</button>
+              <button onClick={() => {
+                if (!val.trim()) return;
+                if (l.channel === 'telegram') { act(l.id, () => sendReply(l.id, val), `Sent to ${l.name}`); }
+                else { window.open(waLink(l.phone, val), '_blank'); act(l.id, () => logSent(l.id, val), `Opened WhatsApp — ${l.name}`); }
+              }} disabled={b || !val.trim()} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg">{b ? '…' : (l.channel === 'telegram' ? 'Send' : 'Open WhatsApp')}</button>
               <button onClick={() => { navigator.clipboard.writeText(val); showToast('Copied'); }} className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1.5">Copy</button>
             </div>
           </div>
@@ -131,6 +135,23 @@ export default function Pipeline({ leads, status, showToast, refresh }: { leads:
         })() : (
           <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} className="self-start text-xs text-purple-300 hover:text-purple-200 border border-purple-900/50 rounded-lg px-2.5 py-1 disabled:opacity-50">{suggesting === l.id ? 'Generating…' : '✨ Suggest a reply'}</button>
         )}
+
+        {/* Agreement send tools (Baileys-free): download the PDF to attach + open WhatsApp
+            pre-filled with the caption. Shown until the signed copy comes back. */}
+        {l.status === 'agreement' && !l.wf?.signed && (() => {
+          const rep = repOf(l);
+          const caption = `Hi ${l.name},${rep ? ` I'm ${rep}.` : ''} Here is the associate agreement. Please review, sign, and send the signed PDF back to me here.`;
+          const docId = (l.wf as { agreement?: { fileIds?: string[] } } | undefined)?.agreement?.fileIds?.[0] || 'default';
+          return (
+            <div className="flex flex-col gap-1.5 bg-purple-950/30 border border-purple-800/60 rounded-lg p-2">
+              <span className="text-xs text-purple-200">Send the agreement <span className="text-gray-500">· attach the PDF in WhatsApp</span></span>
+              <div className="flex gap-2 flex-wrap">
+                <a href={docDownloadUrl(docId)} target="_blank" rel="noopener noreferrer" className="bg-gray-800 hover:bg-gray-700 text-cyan-200 text-xs font-medium px-2.5 py-1.5 rounded-lg">📄 Download PDF</a>
+                <button onClick={() => { window.open(waLink(l.phone, caption), '_blank'); showToast('Opened WhatsApp — attach the downloaded PDF'); }} className="bg-green-700 hover:bg-green-600 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">Open WhatsApp</button>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Agreement / signed: validation result + download the stored signed PDF */}
         {(l.status === 'agreement' || l.status === 'signed') && l.wf?.signed && (() => { const r = l.wf.signed.result; return (
@@ -156,8 +177,8 @@ export default function Pipeline({ leads, status, showToast, refresh }: { leads:
         )}
 
         <div className="flex gap-2 flex-wrap">
-          {l.status === 'attended' && <button onClick={() => act(l.id, () => sendAgreement(l.id), `📎 Agreement (PDF) sent to ${l.name}`)} disabled={b} title="Sends the agreement PDF via this lead's number and moves them to Agreement"
-            className="bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">{b ? '…' : '📎 Send agreement'}</button>}
+          {l.status === 'attended' && <button onClick={() => act(l.id, () => sendAgreement(l.id), `${l.name} → Agreement — now attach the PDF & open WhatsApp`)} disabled={b} title="Moves to Agreement and reveals the send tools (download the PDF + open WhatsApp to send it)"
+            className="bg-purple-700 hover:bg-purple-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">{b ? '…' : '📎 Prepare agreement'}</button>}
           {next && <button onClick={() => act(l.id, () => setStatus(l.id, next.to, next.contacts ? { contacted: true } : undefined), `${l.name}: ${next.label}`)} disabled={b}
             className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">{b ? '…' : next.label}</button>}
           {l.channel === 'telegram' && <button onClick={() => { setSendFor(sendFor === l.id ? null : l.id); setSendText(l.ai?.suggested_reply || ''); }} className="text-xs text-sky-400 hover:text-sky-300 px-2 py-1.5 font-medium">Reply ✈</button>}

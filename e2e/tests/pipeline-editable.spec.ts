@@ -13,12 +13,14 @@ test.describe('pipeline — editable suggested reply', () => {
 
     const custom = 'AMENDED-BY-REP-9988';
     await card.locator('textarea').fill(custom);
-    await card.getByRole('button', { name: 'Send', exact: true }).click();
-    await expect(page.getByText('Sent to Ivy Suggested')).toBeVisible();
+    // WhatsApp is Baileys-free: "Open WhatsApp" opens a click-to-chat deep link and
+    // RECORDS the send (no socket). The edited text — not the AI draft — is recorded.
+    await card.getByRole('button', { name: /Open WhatsApp/ }).click();
+    await expect(page.getByText(/Opened WhatsApp — Ivy Suggested/)).toBeVisible();
 
-    // The edited text — not the original AI draft — is what actually went out.
-    const sent: Array<{ content: { text?: string } }> =
-      await (await fetch('http://localhost:10001/__test/sent')).json();
-    expect(sent.some((s) => s.content?.text === custom)).toBeTruthy();
+    const leads: Array<{ name: string; sentReplies?: Array<{ text: string }> }> =
+      await (await fetch('http://localhost:10001/api/leads')).json();
+    const ivy = leads.find((l) => l.name === 'Ivy Suggested');
+    expect(ivy?.sentReplies?.some((r) => r.text === custom)).toBeTruthy();
   });
 });

@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import type { Lead, WaNumber } from './types';
 import { relTime, lastContactOf, lastReplyOf } from './types';
 import { fmtPhone } from './countryCodes';
-import { logReply, sendReply, setStatus } from './leadApi';
+import { logReply, sendReply, setStatus, logSent, waLink } from './leadApi';
 
 // Triage queue: leads that replied and need a human decision (question / review).
 export default function Inbox({ leads, numbers = [], showToast, refresh }: { leads: Lead[]; numbers?: WaNumber[]; showToast: (m: string, ok?: boolean) => void; refresh: () => void }) {
@@ -100,7 +100,13 @@ export default function Inbox({ leads, numbers = [], showToast, refresh }: { lea
                   </div>
                   <textarea value={composeFor === l.id ? composeText : (l.ai?.suggested_reply || '')} onChange={(e) => { setComposeFor(l.id); setComposeText(e.target.value); }} rows={3} placeholder="Type a reply, or ✨ Regenerate for an AI draft…" className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-green-600" />
                   <div className="flex gap-2">
-                    <button onClick={() => act(l.id, () => sendReply(l.id, composeFor === l.id ? composeText : l.ai!.suggested_reply), `Sent to ${l.name}`).then(() => { setComposeFor(l.id); setComposeText(''); })} disabled={b || !((composeFor === l.id ? composeText : l.ai?.suggested_reply) || '').trim()} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg">{b ? '…' : `Send ${l.channel === 'telegram' ? '✈' : 'via WhatsApp'}`}</button>
+                    <button onClick={() => {
+                      const text = ((composeFor === l.id ? composeText : l.ai?.suggested_reply) || '').trim();
+                      if (!text) return;
+                      const done = () => { setComposeFor(l.id); setComposeText(''); };
+                      if (l.channel === 'telegram') { act(l.id, () => sendReply(l.id, text), `Sent to ${l.name}`).then(done); }
+                      else { window.open(waLink(l.phone, text), '_blank'); act(l.id, () => logSent(l.id, text), `Opened WhatsApp — ${l.name}`).then(done); }
+                    }} disabled={b || !((composeFor === l.id ? composeText : l.ai?.suggested_reply) || '').trim()} className="bg-green-700 hover:bg-green-600 disabled:opacity-50 text-white text-xs font-medium px-3 py-1.5 rounded-lg">{b ? '…' : (l.channel === 'telegram' ? 'Send ✈' : 'Open WhatsApp')}</button>
                     <button onClick={() => { navigator.clipboard.writeText((composeFor === l.id ? composeText : l.ai?.suggested_reply) || ''); showToast('Copied'); }} className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1.5">Copy</button>
                   </div>
                 </div>
