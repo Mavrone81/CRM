@@ -1047,6 +1047,77 @@ function applyOwnSend(leads, msg, via) {
   return lead.id;
 }
 
+// Record a rep's own outbound (fromMe) message identified by phone+text — the
+// by-phone twin of applyOwnSend, used by the /api/ingest receiver path (the on-prem
+// read-only listener forwards a simplified {phone,text,id} rather than a raw msg).
+// Dedups against a redelivery (same id) AND against a deep-link log-sent (same text
+// within 2 min) so the thread never double-counts. Returns true if it recorded.
+function recordOwnSendByPhone(leads, phone, text, id, via) {
+  if (!text || !text.trim()) return false;
+  const lead = matchLead(leads, phone);
+  if (!lead) return false;
+  lead.sentReplies = lead.sentReplies || [];
+  const now = Date.now();
+  const dup = (id && lead.sentReplies.some((r) => r.id === id)) ||
+    lead.sentReplies.some((r) => r.text === text && Math.abs(new Date(r.timestamp || 0).getTime() - now) < 120000);
+  if (dup) return false;
+  lead.sentReplies.push({ id: id || undefined, text, timestamp: new Date().toISOString(), channel: 'whatsapp', via });
+  lead.needsReply = false;
+  return true;
+}
+
+// Shared inbound pipeline: a lead just received `text` (already appended to replies
+// by the caller). Run the MANUAL-SEND classify/advance cascade — opt-out, decline,
+// then status-specific (classify pre-pipeline · attendance for invited · signed-PDF
+// validation for agreement · onboarding pick · classifyStage forward-move otherwise).
+// NEVER auto-sends. `pdfBuffer` is the returned signed-agreement bytes (agreement
+// stage). Used by BOTH the live socket handler and the /api/ingest receiver so the
+// two inbound paths behave identically. All slow AI runs OUTSIDE mutateLeads.
+async function advanceLeadFromInbound(leadId, text, { pdfBuffer = null } = {}) {
+  const fresh = readLeads();
+  const target = fresh.find((l) => l.id === leadId);
+  if (!target) return;
+  const now = () => new Date().toISOString();
+  const st = target.status || deriveStatus(target);
+  const cfg = readConfig();
+
+  if (isOptOut(text)) { mutateLeads((ls) => { const t = ls.find((l) => l.id === leadId); if (t) { t.status = 'opted_out'; t.needsReply = false; } }); console.log(`[optout] ${target.name} opted out`); return; }
+  if (isDecline(text) && !['declined', 'opted_out'].includes(st)) { mutateLeads((ls) => { const t = ls.find((l) => l.id === leadId); if (t) t.status = 'declined'; }); console.log(`[decline] ${target.name}: "${text.slice(0, 40)}" -> declined`); return; }
+
+  if (['new', 'contacted', 'question', 'review'].includes(st)) {
+    const ai = await classifyReplies(target.name, target.replies, repNameFor(target), bookingUrl(target.id), isNewRepTakeover(target));
+    mutateLeads((ls) => { const t = ls.find((l) => l.id === leadId); if (t) { t.ai = { ...ai, classifiedAt: now() }; t.status = statusFromCategory(ai.category); } });
+    console.log(`[ai] ${target.name}: ${ai.category}`);
+  } else if (st === 'invited') {
+    const att = await classifyAttendance(target.name, target.replies);
+    mutateLeads((ls) => { const t = ls.find((l) => l.id === leadId); if (!t) return; t.wf = { ...(t.wf || {}), confirmation: { ...att, detectedAt: now() } }; if (att.status === 'confirmed' && att.confidence !== 'low') t.status = 'confirmed'; else if (att.status === 'declined') t.status = 'declined'; });
+    console.log(`[attend] ${target.name}: ${att.status} (${att.confidence})`);
+  } else if (st === 'agreement') {
+    if (pdfBuffer) {
+      const fname = `${target.id}-${Date.now()}.pdf`;
+      writeFileSync(join(SIGNED_DIR, fname), encBuf(pdfBuffer)); // encrypted at rest (PII)
+      const result = await validateSignedAgreement(target.name, pdfBuffer.toString('base64'), cfg.requiredFields);
+      mutateLeads((ls) => {
+        const t2 = ls.find((l) => l.id === leadId);
+        if (!t2) return;
+        t2.wf = t2.wf || {};
+        const prev = t2.wf.signed || { attempts: 0, history: [] };
+        t2.wf.signed = { attempts: (prev.attempts || 0) + 1, history: [...(prev.history || []), { at: now(), file: fname, ...result }], lastFile: fname, receivedAt: now(), result };
+        if (result.complete) t2.status = 'signed';
+      });
+      console.log(`[signed] ${target.name}: complete=${result.complete} missing=${(result.missing || []).length}`);
+    }
+  } else if (st === 'onboarding') {
+    const r = await parseOnboardingChoice(text, cfg.onboardingSessions);
+    if (r.sessionId) { mutateLeads((ls) => { const t = ls.find((l) => l.id === leadId); if (t) { t.status = 'booked'; t.wf = { ...(t.wf || {}), onboardingSession: r.sessionId, onboardingSlottedAt: now() }; } }); console.log(`[onboarding] ${target.name} picked ${r.sessionId} -> booked`); }
+  } else {
+    const sc = await classifyStage(target.name, target.replies, st, repNameFor(target));
+    const mv = applyStageMove(st, sc);
+    mutateLeads((ls) => { const t = ls.find((l) => l.id === leadId); if (!t) return; t.ai = { ...(t.ai || {}), reason: sc.reason || t.ai?.reason, suggested_reply: sc.suggested_reply || t.ai?.suggested_reply || '', stage: sc.status, classifiedAt: now() }; if (mv) t.status = mv; });
+    if (mv) console.log(`[stage] ${target.name}: ${st} -> ${mv} (${sc.confidence})`);
+  }
+}
+
 // ── WhatsApp ──────────────────────────────────────────────────────────────────
 async function connectNumber(numId) {
   // Kill-switch: WA_DISABLED stops ALL WhatsApp connection attempts (boot loop,
@@ -1189,67 +1260,16 @@ async function connectNumber(numId) {
       saveLeads(leads);
       console.log(`[reply:${numId}] ${lead.name}: ${text}`);
 
-      // Re-read fresh to avoid stomping concurrent writes.
-      const fresh = readLeads();
-      const target = fresh.find((l) => l.id === lead.id);
-      if (!target) continue;
-      const now = () => new Date().toISOString();
-      const st = target.status || deriveStatus(target);
-      const cfg = readConfig();
-
-      // Opt-out: they asked us to stop — flag and never message again. (Reply was
-      // already captured atomically above; just apply the status change.)
-      if (isOptOut(text)) { mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.status = 'opted_out'; t.needsReply = false; } }); console.log(`[optout] ${target.name} opted out`); continue; }
-
-      // Explicit decline at ANY active stage → declined (a withdrawal, like opt-out).
-      // This covers pipeline leads the status-gated classifier below would otherwise skip.
-      if (isDecline(text) && !['declined', 'opted_out'].includes(st)) { mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) t.status = 'declined'; }); console.log(`[decline] ${target.name}: "${text.slice(0, 40)}" -> declined`); continue; }
-
-      // MANUAL-SEND MODE: classify + advance status (read-only) only. Never auto-send.
-      // Slow AI runs OUTSIDE the write; the result is applied via mutateLeads (which
-      // re-reads fresh) so concurrent replies are never clobbered.
-      if (['new', 'contacted', 'question', 'review'].includes(st)) {
-        const ai = await classifyReplies(target.name, target.replies, repNameFor(target), bookingUrl(target.id), isNewRepTakeover(target));
-        mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.ai = { ...ai, classifiedAt: now() }; t.status = statusFromCategory(ai.category); } });
-        console.log(`[ai] ${target.name}: ${ai.category} -> ${target.status}`);
-      } else if (st === 'invited') {
-        const att = await classifyAttendance(target.name, target.replies);
-        mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (!t) return; t.wf = { ...(t.wf || {}), confirmation: { ...att, detectedAt: now() } }; if (att.status === 'confirmed' && att.confidence !== 'low') t.status = 'confirmed'; else if (att.status === 'declined') t.status = 'declined'; });
-        console.log(`[attend] ${target.name}: ${att.status} (${att.confidence})`);
-      } else if (st === 'agreement') {
-        const isPdf = docMsg && (docMsg.mimetype || '').toLowerCase().includes('pdf');
-        if (isPdf) {
-          try {
-            const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage });
-            const fname = `${target.id}-${Date.now()}.pdf`;
-            writeFileSync(join(SIGNED_DIR, fname), encBuf(buffer)); // encrypted at rest (PII)
-            const result = await validateSignedAgreement(target.name, buffer.toString('base64'), cfg.requiredFields);
-            mutateLeads((ls) => {
-              const t2 = ls.find((l) => l.id === target.id);
-              if (!t2) return;
-              t2.wf = t2.wf || {};
-              const prev = t2.wf.signed || { attempts: 0, history: [] };
-              t2.wf.signed = { attempts: (prev.attempts || 0) + 1, history: [...(prev.history || []), { at: now(), file: fname, ...result }], lastFile: fname, receivedAt: now(), result };
-              if (result.complete) t2.status = 'signed';
-            });
-            console.log(`[signed] ${target.name}: complete=${result.complete} missing=${(result.missing || []).length}`);
-          } catch (err) { console.error('[signed] processing failed:', err.message); }
-        }
-      } else if (st === 'onboarding') {
-        const r = await parseOnboardingChoice(text, cfg.onboardingSessions);
-        if (r.sessionId) {
-          mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (t) { t.status = 'booked'; t.wf = { ...(t.wf || {}), onboardingSession: r.sessionId, onboardingSlottedAt: now() }; } });
-          console.log(`[onboarding] ${target.name} picked ${r.sessionId} -> booked`);
-        }
-      } else {
-        // Any other pipeline stage (interested/confirmed/scheduled/attended/signed/booked):
-        // re-evaluate from the whole conversation and auto-move FORWARD when the reply
-        // clearly indicates progression (e.g. "I already attended", "second briefing").
-        const sc = await classifyStage(target.name, target.replies, st, repNameFor(target));
-        const mv = applyStageMove(st, sc);
-        mutateLeads((ls) => { const t = ls.find((l) => l.id === target.id); if (!t) return; t.ai = { ...(t.ai || {}), reason: sc.reason || t.ai?.reason, suggested_reply: sc.suggested_reply || t.ai?.suggested_reply || '', stage: sc.status, classifiedAt: now() }; if (mv) t.status = mv; });
-        if (mv) console.log(`[stage] ${target.name}: ${st} -> ${mv} (${sc.confidence})`);
+      // A returned signed PDF (agreement stage) must be downloaded via THIS socket
+      // before the shared pipeline can validate it.
+      const st = lead.status || deriveStatus(lead);
+      let pdfBuffer = null;
+      if (st === 'agreement' && docMsg && (docMsg.mimetype || '').toLowerCase().includes('pdf')) {
+        try { pdfBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage }); }
+        catch (err) { console.error('[signed] download failed:', err.message); }
       }
+      // Classify + advance via the SHARED inbound pipeline (also used by /api/ingest).
+      await advanceLeadFromInbound(lead.id, text, { pdfBuffer });
     }
   });
 
@@ -2066,6 +2086,61 @@ app.post('/api/leads/:id/log-sent', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Inbound sync (on-prem read-only receiver) ───────────────────────────────────
+// Baileys can't connect from the droplet's datacenter IP (428), so a read-only
+// Baileys listener runs on the on-prem residential box and POSTs incoming messages
+// here. This is the ONE inbound path now — it feeds the same classify/advance
+// pipeline the live socket used. Token-authed (shared INGEST_TOKEN, in the body so it
+// survives the web /api/proxy passthrough which drops custom headers). Disabled (401)
+// until INGEST_TOKEN is set. Each message: { phone, text, fromMe, id?, ts?, via?,
+// pdfBase64?, fileName? }. fromMe = a rep's own send (mirrors the thread); else inbound.
+const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
+app.post('/api/ingest', async (req, res) => {
+  const token = (req.body && req.body.token) || (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!INGEST_TOKEN || token !== INGEST_TOKEN) return res.status(401).json({ error: 'unauthorized' });
+  const msgs = Array.isArray(req.body.messages) ? req.body.messages : (req.body.message ? [req.body.message] : []);
+  if (!msgs.length) return res.status(400).json({ error: 'no messages' });
+
+  let synced = 0, matched = 0, unmatched = 0;
+  for (const m of msgs) {
+    const phone = String(m.phone || '').replace(/\D/g, '');
+    const text = (m.text == null ? '' : String(m.text));
+    if (!phone) { unmatched++; continue; }
+
+    if (m.fromMe) {
+      // The rep sent this from their own app (deep link or by hand) — mirror it.
+      let ok = false;
+      mutateLeads((ls) => { ok = recordOwnSendByPhone(ls, phone, text, m.id || null, m.via); });
+      if (ok) { synced++; matched++; }
+      continue;
+    }
+
+    const pdfBuffer = m.pdfBase64 ? Buffer.from(m.pdfBase64, 'base64') : null;
+    if (!text.trim() && !pdfBuffer) continue; // nothing to record
+
+    const lead = matchLead(readLeads(), phone);
+    if (!lead) { console.log(`[ingest] unmatched inbound phone=${phone}`); unmatched++; continue; }
+    matched++;
+
+    // Append the inbound atomically (dedup on message id vs redelivery).
+    const bodyText = text || `[document: ${m.fileName || 'file'}]`;
+    mutateLeads((ls) => {
+      const l = ls.find((x) => x.id === lead.id);
+      if (!l) return;
+      l.replies = l.replies || [];
+      if (m.id && l.replies.some((r) => r.id === m.id)) return; // already have it
+      l.replies.push({ id: m.id || undefined, text: bodyText, timestamp: m.ts || new Date().toISOString(), via: m.via });
+      l.needsReply = true;
+      if (!l.assignedNumber && m.via) l.assignedNumber = m.via;
+      if (!l.channel) l.channel = 'whatsapp';
+    });
+    // Classify + advance through the shared pipeline (opt-out/decline/stage/PDF…).
+    await advanceLeadFromInbound(lead.id, text, { pdfBuffer });
+    synced++;
+  }
+  res.json({ ok: true, synced, matched, unmatched });
+});
+
 // Generate a fresh, varied suggested reply for a lead (so no two are similar —
 // avoids WhatsApp flagging templated bulk sends). Contextual for leads who have
 // replied; a spintax opening for not-yet-contacted leads. Stores on the lead.
@@ -2257,5 +2332,5 @@ export {
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
   bookingToken, verifyBookingToken, bookingUrl, bookingKind, bookingSlots,
-  encStr, decStr, encBuf, decBuf, applyHistoryMessage, applyOwnSend, isNewRepTakeover, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
+  encStr, decStr, encBuf, decBuf, applyHistoryMessage, applyOwnSend, recordOwnSendByPhone, advanceLeadFromInbound, isNewRepTakeover, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
 };

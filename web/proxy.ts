@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { SESSION_COOKIE, verifyToken } from '@/lib/auth';
 
 // Paths reachable without a session: the login page itself, the auth endpoints,
-// and the self-serve booking page + its API (each is gated by a per-lead HMAC
-// token, so it is safe — and intended — to be reachable without logging in).
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/book', '/api/proxy/book'];
+// the self-serve booking page + its API (gated by a per-lead HMAC token), and the
+// inbound ingest endpoint (gated by the shared INGEST_TOKEN checked server-side) —
+// so the on-prem read-only WhatsApp receiver can post messages without a session.
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/book', '/api/proxy/book', '/api/proxy/ingest'];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
