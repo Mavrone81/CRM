@@ -486,6 +486,20 @@ function verifyBookingToken(tok) {
   const id = Number(p); return Number.isInteger(id) ? id : null;
 }
 function bookingUrl(id) { return `${PUBLIC_URL}/book/${bookingToken(id)}`; }
+
+// E-sign link — same HMAC pattern as booking but namespaced ('sign:') so the two
+// token kinds can't be swapped. The lead opens /sign/<token>, fills the required
+// fields + draws a signature, and the CRM validates DETERMINISTICALLY (form fields
+// can't be missing) — replacing the print→sign→scan→send-PDF-back-over-chat flow.
+const signSign = (p) => bookSign(`sign:${p}`);
+function signTokenFor(id) { const p = String(id); return `${p}.${signSign(p)}`; }
+function verifySignToken(tok) {
+  if (!tok || typeof tok !== 'string' || !tok.includes('.')) return null;
+  const i = tok.lastIndexOf('.'); const p = tok.slice(0, i), sig = tok.slice(i + 1);
+  if (!p || signSign(p) !== sig) return null;
+  const id = Number(p); return Number.isInteger(id) ? id : null;
+}
+function signUrl(id) { return `${PUBLIC_URL}/sign/${signTokenFor(id)}`; }
 // Which slot list applies: once they've signed, they pick an ONBOARDING slot; before that, a BRIEFING slot.
 const ONBOARDING_STATUSES = ['signed', 'onboarding', 'booked', 'onboarded'];
 function bookingKind(lead) { return ONBOARDING_STATUSES.includes(lead.status) ? 'onboarding' : 'briefing'; }
@@ -1524,6 +1538,134 @@ app.post('/api/book/:token', (req, res) => {
   res.json({ ok: true, kind, display: sessionDisplaySrv(slot) });
 });
 
+// ── E-sign portal (public, HMAC-token gated) ─────────────────────────────────────
+// The lead's own agreement doc: the one attached at "Prepare agreement", else default.
+function agreementDocFor(lead) {
+  const docs = readDocs();
+  const chosenId = lead.wf?.agreement?.fileIds?.[0];
+  return docs.find((d) => d.id === chosenId) || docs.find((d) => d.isDefault) || docs[0] || null;
+}
+const isSignatureField = (f) => /signature/i.test(String(f));
+
+app.get('/api/sign/:token', (req, res) => {
+  const id = verifySignToken(req.params.token);
+  if (id == null) return res.status(404).json({ error: 'This signing link is invalid or has expired.' });
+  const lead = readLeads().find((l) => l.id === id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  const doc = agreementDocFor(lead);
+  const cfg = readConfig();
+  res.json({
+    name: lead.name,
+    doc: doc ? { name: doc.name } : null,
+    // Text fields the lead must fill; signature-type fields are covered by the canvas.
+    fields: (cfg.requiredFields || []).filter((f) => !isSignatureField(f)),
+    signed: !!(lead.wf?.signed?.result?.complete) || ['signed', 'onboarding', 'booked', 'onboarded'].includes(lead.status),
+  });
+});
+
+// Stream the agreement PDF so the lead can read it before signing.
+app.get('/api/sign/:token/doc', (req, res) => {
+  const id = verifySignToken(req.params.token);
+  if (id == null) return res.status(404).json({ error: 'invalid link' });
+  const lead = readLeads().find((l) => l.id === id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  const doc = agreementDocFor(lead);
+  if (!doc || !existsSync(join(DOCS_DIR, doc.file))) return res.status(404).json({ error: 'agreement not available' });
+  res.setHeader('Content-Type', doc.mimetype || 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${(doc.name || 'agreement.pdf').replace(/[^\w.\-]/g, '_')}"`);
+  res.send(decBuf(readFileSync(join(DOCS_DIR, doc.file))));
+});
+
+// pdf-lib fonts encode WinAnsi only — keep stamped text within printable Latin-1.
+const pdfSafe = (s) => String(s ?? '').replace(/[^\x20-\xFE]/g, '?');
+
+// Append a signature-certificate page to the agreement PDF: the filled fields, the
+// drawn signature, and an audit line (timestamp + IP). Returns the PDF bytes.
+async function buildSignedPdf(agreementBytes, leadName, fields, signaturePng, ip) {
+  const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
+  // Append to the agreement when it parses; else a standalone certificate still
+  // records the signing (a malformed agreement upload must not block a signature).
+  let pdf, page;
+  try {
+    pdf = agreementBytes ? await PDFDocument.load(agreementBytes, { ignoreEncryption: true }) : await PDFDocument.create();
+    page = pdf.addPage([595, 842]); // A4
+  } catch {
+    pdf = await PDFDocument.create();
+    page = pdf.addPage([595, 842]);
+  }
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  let y = 780;
+  const line = (text, { f = font, size = 12, color = rgb(0.1, 0.1, 0.1), gap = 22 } = {}) => {
+    page.drawText(pdfSafe(text), { x: 56, y, size, font: f, color });
+    y -= gap;
+  };
+  line('Signature Certificate', { f: bold, size: 20, gap: 34 });
+  line(`Associate: ${leadName}`, { f: bold, size: 13, gap: 26 });
+  for (const [k, v] of Object.entries(fields)) line(`${k}: ${v}`, { size: 12 });
+  y -= 8;
+  line('Signature:', { f: bold, size: 12, gap: 10 });
+  const sig = await pdf.embedPng(signaturePng);
+  const dims = sig.scaleToFit(280, 110);
+  page.drawImage(sig, { x: 56, y: y - dims.height, width: dims.width, height: dims.height });
+  y -= dims.height + 26;
+  const ts = new Date().toLocaleString('en-SG', { timeZone: 'Asia/Singapore' });
+  line(`Signed electronically on ${ts} (SGT)`, { size: 10, color: rgb(0.35, 0.35, 0.35), gap: 16 });
+  line(`IP address: ${ip || 'unknown'}`, { size: 10, color: rgb(0.35, 0.35, 0.35), gap: 16 });
+  return Buffer.from(await pdf.save());
+}
+
+app.post('/api/sign/:token', async (req, res) => {
+  const id = verifySignToken(req.params.token);
+  if (id == null) return res.status(404).json({ error: 'This signing link is invalid or has expired.' });
+  const lead = readLeads().find((l) => l.id === id);
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  if (lead.wf?.signed?.result?.complete) return res.json({ ok: true, already: true });
+
+  const cfg = readConfig();
+  const required = (cfg.requiredFields || []).filter((f) => !isSignatureField(f));
+  const given = req.body.fields || {};
+  // DETERMINISTIC validation — the whole point of the portal: a required field is
+  // either present or the submit is rejected, no AI reading a scan.
+  const missing = required.filter((f) => !String(given[f] ?? '').trim());
+  const sigMatch = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(req.body.signature || '');
+  if (!sigMatch) missing.push('Signature');
+  if (missing.length) return res.status(400).json({ error: 'missing', missing });
+
+  const fields = Object.fromEntries(required.map((f) => [f, String(given[f]).trim()]));
+  try {
+    const doc = agreementDocFor(lead);
+    const agreementBytes = doc && existsSync(join(DOCS_DIR, doc.file)) ? decBuf(readFileSync(join(DOCS_DIR, doc.file))) : null;
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress;
+    const pdfBytes = await buildSignedPdf(agreementBytes, lead.name, fields, Buffer.from(sigMatch[1], 'base64'), ip);
+    const fname = `${lead.id}-esign-${Date.now()}.pdf`;
+    writeFileSync(join(SIGNED_DIR, fname), encBuf(pdfBytes)); // encrypted at rest (PII)
+    const now = new Date().toISOString();
+    const result = { signed: true, missing: [], complete: true, method: 'esign', fields };
+    mutateLeads((ls) => {
+      const t = ls.find((l) => l.id === id);
+      if (!t) return;
+      t.wf = t.wf || {};
+      const prev = t.wf.signed || { attempts: 0, history: [] };
+      t.wf.signed = { attempts: (prev.attempts || 0) + 1, history: [...(prev.history || []), { at: now, file: fname, ...result }], lastFile: fname, receivedAt: now, result };
+      if (!['signed', 'onboarding', 'booked', 'onboarded', 'declined', 'opted_out'].includes(t.status)) t.status = 'signed';
+      t.needsReply = false;
+    });
+    console.log(`[esign] ${lead.name} (#${id}) signed via portal -> signed`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[esign] failed:', err.message);
+    res.status(500).json({ error: 'Could not record the signature — please try again.' });
+  }
+});
+
+// Auth-gated helper for the UI: the lead's e-sign link (HMAC needs the server secret).
+app.get('/api/leads/:id/sign-link', (req, res) => {
+  const lead = readLeads().find((l) => l.id === Number(req.params.id));
+  if (!lead) return res.status(404).json({ error: 'not found' });
+  res.json({ url: signUrl(lead.id) });
+});
+
 // Bulk send — must be registered BEFORE /api/send/:id to avoid route shadowing
 const BATCH_SIZE = 40;
 const BATCH_PAUSE = 30000; // 30s between batches
@@ -1901,7 +2043,9 @@ app.post('/api/wf/agreement/:id', (req, res) => {
     : all.filter((d) => d.isDefault);
   if (!chosen.length) chosen = all.slice(0, 1);
   const rep = repNameFor(lead);
-  const caption = req.body.caption || `Hi ${lead.name},${rep ? ` I'm ${rep}.` : ''} Here is the associate agreement. Please review, sign, and send the signed PDF back to me here.`;
+  // The caption carries the e-sign portal link — the lead reviews + signs online
+  // (deterministic validation), no print/scan/PDF-return needed.
+  const caption = req.body.caption || `Hi ${lead.name},${rep ? ` I'm ${rep}.` : ''} Here is our associate agreement — you can review and sign it online here: ${signUrl(lead.id)}\n\nLet me know if you have any questions!`;
   const ts = new Date().toISOString();
   lead.stage = 'agreement_sent';
   lead.status = 'agreement';
@@ -2332,5 +2476,6 @@ export {
   readConfig, writeConfig, ensureStatuses, sockForLead, firstSock, numbersCfg,
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
   bookingToken, verifyBookingToken, bookingUrl, bookingKind, bookingSlots,
+  signTokenFor, verifySignToken, signUrl,
   encStr, decStr, encBuf, decBuf, applyHistoryMessage, applyOwnSend, recordOwnSendByPhone, advanceLeadFromInbound, isNewRepTakeover, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
 };

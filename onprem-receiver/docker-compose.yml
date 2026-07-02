@@ -9,5 +9,6 @@ services:
       CRM_INGEST_URL: ${CRM_INGEST_URL:-https://crm.urbanwerkzsg.com/api/proxy/ingest}
       INGEST_TOKEN: ${INGEST_TOKEN:?set INGEST_TOKEN in .env (must match the CRM server)}
       NUMBER_ID: ${NUMBER_ID:-onprem-n2}
+      PAIR_PHONE: ${PAIR_PHONE:-}   # set to link by pairing code (digits only) instead of QR
     volumes:
       - ./session:/app/session   # persists the device link across restarts

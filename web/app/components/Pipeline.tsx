@@ -136,18 +136,38 @@ export default function Pipeline({ leads, status, showToast, refresh }: { leads:
           <button onClick={() => suggest(l.id)} disabled={suggesting === l.id} className="self-start text-xs text-purple-300 hover:text-purple-200 border border-purple-900/50 rounded-lg px-2.5 py-1 disabled:opacity-50">{suggesting === l.id ? 'Generating…' : '✨ Suggest a reply'}</button>
         )}
 
-        {/* Agreement send tools (Baileys-free): download the PDF to attach + open WhatsApp
-            pre-filled with the caption. Shown until the signed copy comes back. */}
+        {/* Agreement send tools: the message carries the E-SIGN PORTAL link (the lead
+            reviews + signs online — no print/scan/PDF-return). PDF stays as fallback.
+            Shown until the signed record arrives. */}
         {l.status === 'agreement' && !l.wf?.signed && (() => {
           const rep = repOf(l);
-          const caption = `Hi ${l.name},${rep ? ` I'm ${rep}.` : ''} Here is the associate agreement. Please review, sign, and send the signed PDF back to me here.`;
+          // The caption recorded at "Prepare agreement" already contains the sign link.
+          const recorded = (l.sentReplies || []).filter((r) => (r as { kind?: string }).kind === 'agreement' && !r.text.startsWith('[attached')).at(-1)?.text;
+          const fetchLink = async () => { const r = await fetch(`${API}/leads/${l.id}/sign-link`); const d = await r.json(); return d.url as string; };
+          const openWa = async () => {
+            let caption = recorded;
+            if (!caption) {
+              // Pre-open synchronously so the popup isn't blocked while we fetch.
+              const w = window.open('about:blank', '_blank');
+              try { const url = await fetchLink(); caption = `Hi ${l.name},${rep ? ` I'm ${rep}.` : ''} Here is our associate agreement — you can review and sign it online here: ${url}\n\nLet me know if you have any questions!`; }
+              catch { w?.close(); showToast('Could not build the sign link', false); return; }
+              if (w) { w.location.href = waLink(l.phone, caption); showToast('Opened WhatsApp'); return; }
+            }
+            window.open(waLink(l.phone, caption!), '_blank');
+            showToast('Opened WhatsApp');
+          };
+          const copyLink = async () => {
+            try { const url = await fetchLink(); await navigator.clipboard.writeText(url); showToast('Sign link copied'); }
+            catch { showToast('Could not copy the link', false); }
+          };
           const docId = (l.wf as { agreement?: { fileIds?: string[] } } | undefined)?.agreement?.fileIds?.[0] || 'default';
           return (
             <div className="flex flex-col gap-1.5 bg-purple-950/30 border border-purple-800/60 rounded-lg p-2">
-              <span className="text-xs text-purple-200">Send the agreement <span className="text-gray-500">· attach the PDF in WhatsApp</span></span>
+              <span className="text-xs text-purple-200">Send the agreement <span className="text-gray-500">· e-sign link in the message</span></span>
               <div className="flex gap-2 flex-wrap">
-                <a href={docDownloadUrl(docId)} target="_blank" rel="noopener noreferrer" className="bg-gray-800 hover:bg-gray-700 text-cyan-200 text-xs font-medium px-2.5 py-1.5 rounded-lg">📄 Download PDF</a>
-                <button onClick={() => { window.open(waLink(l.phone, caption), '_blank'); showToast('Opened WhatsApp — attach the downloaded PDF'); }} className="bg-green-700 hover:bg-green-600 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">Open WhatsApp</button>
+                <button onClick={openWa} className="bg-green-700 hover:bg-green-600 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg">Open WhatsApp</button>
+                <button onClick={copyLink} className="bg-gray-800 hover:bg-gray-700 text-cyan-200 text-xs font-medium px-2.5 py-1.5 rounded-lg">🔗 Copy sign link</button>
+                <a href={docDownloadUrl(docId)} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-gray-200 text-xs px-2 py-1.5">📄 PDF</a>
               </div>
             </div>
           );

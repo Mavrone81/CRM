@@ -19,11 +19,15 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
+import qrpng from 'qrcode';
 
 const INGEST_URL = process.env.CRM_INGEST_URL || 'https://crm.urbanwerkzsg.com/api/proxy/ingest';
 const TOKEN = process.env.INGEST_TOKEN || '';
 const NUMBER_ID = process.env.NUMBER_ID || 'onprem';
 const SESSION_DIR = process.env.SESSION_DIR || './session';
+// If set, link by PAIRING CODE (type a code on the phone) instead of scanning a QR —
+// far easier for a remote/headless box. Must be the full number in E.164, digits only.
+const PAIR_PHONE = (process.env.PAIR_PHONE || '').replace(/\D/g, '');
 
 if (!TOKEN) { console.error('FATAL: INGEST_TOKEN is required (must match the CRM server).'); process.exit(1); }
 
@@ -83,9 +87,26 @@ async function connect() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', (u) => {
+  // Pairing-code linking (no QR): request a code once, for a fresh (unregistered) session.
+  if (PAIR_PHONE && !sock.authState.creds.registered) {
+    setTimeout(async () => {
+      try {
+        const code = await sock.requestPairingCode(PAIR_PHONE);
+        console.log(`\n>>> PAIRING CODE: ${code}`);
+        console.log(`>>> On the ${NUMBER_ID} phone: WhatsApp → Settings → Linked Devices → Link a device → "Link with phone number instead" → enter this code.\n`);
+      } catch (e) { console.log(`pairing-code request failed: ${e.message}`); }
+    }, 3000);
+  }
+
+  sock.ev.on('connection.update', async (u) => {
     const { connection, lastDisconnect, qr } = u;
-    if (qr) { console.log(`\nScan this QR with WhatsApp on the ${NUMBER_ID} phone (Linked Devices → Link a device):\n`); qrcode.generate(qr, { small: true }); }
+    if (qr && !PAIR_PHONE) {
+      console.log(`\nScan this QR with WhatsApp on the ${NUMBER_ID} phone (Linked Devices → Link a device):\n`);
+      qrcode.generate(qr, { small: true });
+      // Also write a scannable PNG so it can be delivered off-box (the ASCII QR is
+      // hard to scan remotely). Overwritten on each rotation — grab the freshest.
+      try { await qrpng.toFile(`${SESSION_DIR}/latest-qr.png`, qr, { width: 512, margin: 2 }); console.log('QR PNG → session/latest-qr.png'); } catch (e) { console.log(`QR PNG failed: ${e.message}`); }
+    }
     if (connection === 'open') log(`✓ linked & listening (read-only) as ${NUMBER_ID}`);
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;

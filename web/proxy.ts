@@ -5,7 +5,7 @@ import { SESSION_COOKIE, verifyToken } from '@/lib/auth';
 // the self-serve booking page + its API (gated by a per-lead HMAC token), and the
 // inbound ingest endpoint (gated by the shared INGEST_TOKEN checked server-side) —
 // so the on-prem read-only WhatsApp receiver can post messages without a session.
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/book', '/api/proxy/book', '/api/proxy/ingest'];
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/auth/logout', '/book', '/api/proxy/book', '/api/proxy/ingest', '/sign', '/api/proxy/sign'];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
