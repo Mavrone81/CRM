@@ -1061,32 +1061,13 @@ function applyOwnSend(leads, msg, via) {
   return lead.id;
 }
 
-// Record a rep's own outbound (fromMe) message identified by phone+text — the
-// by-phone twin of applyOwnSend, used by the /api/ingest receiver path (the on-prem
-// read-only listener forwards a simplified {phone,text,id} rather than a raw msg).
-// Dedups against a redelivery (same id) AND against a deep-link log-sent (same text
-// within 2 min) so the thread never double-counts. Returns true if it recorded.
-function recordOwnSendByPhone(leads, phone, text, id, via) {
-  if (!text || !text.trim()) return false;
-  const lead = matchLead(leads, phone);
-  if (!lead) return false;
-  lead.sentReplies = lead.sentReplies || [];
-  const now = Date.now();
-  const dup = (id && lead.sentReplies.some((r) => r.id === id)) ||
-    lead.sentReplies.some((r) => r.text === text && Math.abs(new Date(r.timestamp || 0).getTime() - now) < 120000);
-  if (dup) return false;
-  lead.sentReplies.push({ id: id || undefined, text, timestamp: new Date().toISOString(), channel: 'whatsapp', via });
-  lead.needsReply = false;
-  return true;
-}
-
 // Shared inbound pipeline: a lead just received `text` (already appended to replies
 // by the caller). Run the MANUAL-SEND classify/advance cascade — opt-out, decline,
 // then status-specific (classify pre-pipeline · attendance for invited · signed-PDF
 // validation for agreement · onboarding pick · classifyStage forward-move otherwise).
 // NEVER auto-sends. `pdfBuffer` is the returned signed-agreement bytes (agreement
-// stage). Used by BOTH the live socket handler and the /api/ingest receiver so the
-// two inbound paths behave identically. All slow AI runs OUTSIDE mutateLeads.
+// stage). Shared by the manual `POST /reply` path and the dormant live socket handler
+// so inbound behaves identically. All slow AI runs OUTSIDE mutateLeads.
 async function advanceLeadFromInbound(leadId, text, { pdfBuffer = null } = {}) {
   const fresh = readLeads();
   const target = fresh.find((l) => l.id === leadId);
@@ -1282,7 +1263,7 @@ async function connectNumber(numId) {
         try { pdfBuffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }), reuploadRequest: sock.updateMediaMessage }); }
         catch (err) { console.error('[signed] download failed:', err.message); }
       }
-      // Classify + advance via the SHARED inbound pipeline (also used by /api/ingest).
+      // Classify + advance via the SHARED inbound pipeline (also used by POST /reply).
       await advanceLeadFromInbound(lead.id, text, { pdfBuffer });
     }
   });
@@ -2230,61 +2211,6 @@ app.post('/api/leads/:id/log-sent', (req, res) => {
   res.json({ ok: true });
 });
 
-// ── Inbound sync (on-prem read-only receiver) ───────────────────────────────────
-// Baileys can't connect from the droplet's datacenter IP (428), so a read-only
-// Baileys listener runs on the on-prem residential box and POSTs incoming messages
-// here. This is the ONE inbound path now — it feeds the same classify/advance
-// pipeline the live socket used. Token-authed (shared INGEST_TOKEN, in the body so it
-// survives the web /api/proxy passthrough which drops custom headers). Disabled (401)
-// until INGEST_TOKEN is set. Each message: { phone, text, fromMe, id?, ts?, via?,
-// pdfBase64?, fileName? }. fromMe = a rep's own send (mirrors the thread); else inbound.
-const INGEST_TOKEN = process.env.INGEST_TOKEN || '';
-app.post('/api/ingest', async (req, res) => {
-  const token = (req.body && req.body.token) || (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  if (!INGEST_TOKEN || token !== INGEST_TOKEN) return res.status(401).json({ error: 'unauthorized' });
-  const msgs = Array.isArray(req.body.messages) ? req.body.messages : (req.body.message ? [req.body.message] : []);
-  if (!msgs.length) return res.status(400).json({ error: 'no messages' });
-
-  let synced = 0, matched = 0, unmatched = 0;
-  for (const m of msgs) {
-    const phone = String(m.phone || '').replace(/\D/g, '');
-    const text = (m.text == null ? '' : String(m.text));
-    if (!phone) { unmatched++; continue; }
-
-    if (m.fromMe) {
-      // The rep sent this from their own app (deep link or by hand) — mirror it.
-      let ok = false;
-      mutateLeads((ls) => { ok = recordOwnSendByPhone(ls, phone, text, m.id || null, m.via); });
-      if (ok) { synced++; matched++; }
-      continue;
-    }
-
-    const pdfBuffer = m.pdfBase64 ? Buffer.from(m.pdfBase64, 'base64') : null;
-    if (!text.trim() && !pdfBuffer) continue; // nothing to record
-
-    const lead = matchLead(readLeads(), phone);
-    if (!lead) { console.log(`[ingest] unmatched inbound phone=${phone}`); unmatched++; continue; }
-    matched++;
-
-    // Append the inbound atomically (dedup on message id vs redelivery).
-    const bodyText = text || `[document: ${m.fileName || 'file'}]`;
-    mutateLeads((ls) => {
-      const l = ls.find((x) => x.id === lead.id);
-      if (!l) return;
-      l.replies = l.replies || [];
-      if (m.id && l.replies.some((r) => r.id === m.id)) return; // already have it
-      l.replies.push({ id: m.id || undefined, text: bodyText, timestamp: m.ts || new Date().toISOString(), via: m.via });
-      l.needsReply = true;
-      if (!l.assignedNumber && m.via) l.assignedNumber = m.via;
-      if (!l.channel) l.channel = 'whatsapp';
-    });
-    // Classify + advance through the shared pipeline (opt-out/decline/stage/PDF…).
-    await advanceLeadFromInbound(lead.id, text, { pdfBuffer });
-    synced++;
-  }
-  res.json({ ok: true, synced, matched, unmatched });
-});
-
 // Generate a fresh, varied suggested reply for a lead (so no two are similar —
 // avoids WhatsApp flagging templated bulk sends). Contextual for leads who have
 // replied; a spintax opening for not-yet-contacted leads. Stores on the lead.
@@ -2477,5 +2403,5 @@ export {
   upcomingSessions, fmtSessions, sessionDisplaySrv, todaySG,
   bookingToken, verifyBookingToken, bookingUrl, bookingKind, bookingSlots,
   signTokenFor, verifySignToken, signUrl,
-  encStr, decStr, encBuf, decBuf, applyHistoryMessage, applyOwnSend, recordOwnSendByPhone, advanceLeadFromInbound, isNewRepTakeover, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
+  encStr, decStr, encBuf, decBuf, applyHistoryMessage, applyOwnSend, advanceLeadFromInbound, isNewRepTakeover, chatPhone, buildLidMap, isOutreachOpener, createOutreachLeads, contactNameMap,
 };
