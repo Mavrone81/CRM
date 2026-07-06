@@ -614,6 +614,11 @@ async function parseOnboardingChoice(text, sessions) {
 // ── State ─────────────────────────────────────────────────────────────────────
 // ── Multi-number WhatsApp: each linked number is an independent socket ───────────
 const conns = new Map(); // numId -> { sock, state, qr, reconnects, label }
+// Receive-only mode: WA_RECEIVE_ONLY keeps sockets connected for INBOUND capture
+// (live replies, history backfill) but blocks every outbound socket send —
+// outbound WhatsApp stays on click-to-chat deep links (a human presses send).
+// Receiving carries no ban risk; sending is what triggers restrictions.
+const waReceiveOnly = () => !!process.env.WA_RECEIVE_ONLY;
 function numbersCfg() {
   const n = readConfig().numbers;
   return (n && n.length) ? n : [{ id: 'n1', label: 'Number 1' }];
@@ -685,6 +690,7 @@ function pickControl(excludeId) {
   return null;
 }
 async function probeNumber(numId) {
+  if (waReceiveOnly()) return { error: 'WA_RECEIVE_ONLY — probes disabled (a probe sends a message)' };
   const c = conns.get(numId);
   if (!c || c.state !== 'open' || !c.sock || !c.phone) return { error: 'number not connected' };
   const control = pickControl(numId);
@@ -697,6 +703,7 @@ async function probeNumber(numId) {
   } catch (e) { c.probe = { id: null, at: Date.now(), delivered: false, error: e.message }; return { error: e.message }; }
 }
 async function recoveryProbe() {
+  if (waReceiveOnly()) return; // probes exist to test send deliverability — moot in receive-only mode
   for (const [numId, c] of conns) {
     const cfg = numbersCfg().find((n) => n.id === numId);
     if (!((cfg && cfg.paused) || c.health === 'undelivered')) continue;
@@ -766,6 +773,7 @@ function isDecline(text) {
 const outreach = { running: false, queue: [], sent: 0, failed: 0, startedAt: null };
 async function outreachTick() {
   if (!outreach.running) return;
+  if (waReceiveOnly()) { outreach.running = false; console.log('[outreach] WA_RECEIVE_ONLY — halting'); return; }
   if (!outreach.queue.length) { outreach.running = false; console.log(`[outreach] complete — ${outreach.sent} sent`); return; }
   // Quiet hours: hold the queue and re-check every 5 min until the window opens.
   if (!inSendWindow()) { console.log('[outreach] outside send window (07:00–22:30 SGT) — holding'); return setTimeout(outreachTick, 5 * 60 * 1000); }
@@ -1144,6 +1152,13 @@ async function connectNumber(numId) {
     // "Waiting for this message" — re-encrypt and resend the original.
     getMessage: async (key) => msgStore.get(key.id) || undefined,
   });
+
+  // Backstop for receive-only mode: no code path can transmit through this
+  // socket, whatever endpoint it came from.
+  if (waReceiveOnly()) {
+    sock.sendMessage = async () => { throw new Error('WA_RECEIVE_ONLY — outbound WhatsApp is disabled (use the Open-in-WhatsApp deep link)'); };
+    console.log(`[wa] ${label}: receive-only — outbound sends blocked`);
+  }
 
   const c = conns.get(numId) || { reconnects: 0 };
   c.sock = sock; c.label = label; c.state = 'connecting'; c.qr = null;
@@ -1823,6 +1838,7 @@ app.post('/api/numbers/:id/probe', async (req, res) => { const r = await probeNu
 // ── Sequenced outreach control ──────────────────────────────────────────────────
 // Start paced outreach to a set of leads (default: all 'new' WhatsApp leads).
 app.post('/api/outreach/start', (req, res) => {
+  if (waReceiveOnly()) return res.status(409).json({ error: 'receive_only', hint: 'Outbound WhatsApp is deep-link only — sockets are inbound-capture only.' });
   if (outreach.running) return res.status(409).json({ error: 'outreach already running' });
   const ids = Array.isArray(req.body.leadIds) ? req.body.leadIds : null;
   const leads = readLeads();
@@ -2168,6 +2184,8 @@ app.post('/api/leads/:id/send', async (req, res) => {
   }
   // Compliance: never message someone who opted out.
   if (lead.status === 'opted_out') return res.status(400).json({ error: 'This lead opted out — messaging is blocked.' });
+  // Receive-only mode: sockets only capture inbound; reps send via deep links.
+  if (waReceiveOnly()) return res.status(409).json({ error: 'receive_only', hint: 'Use Open in WhatsApp (deep link) — the socket is inbound-capture only.' });
   // WhatsApp send via the lead's sticky number. Anti-ban: each message is the
   // AI's per-lead reply (generated with high variation) so no two are alike.
   const sock = sockForLead(lead);
