@@ -1144,8 +1144,10 @@ async function connectNumber(numId) {
     logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
     // Identify as a Desktop client — WhatsApp only pushes chat-history sync to
-    // desktop-class clients, which the backfill needs.
-    browser: Browsers.macOS('Desktop'),
+    // desktop-class clients, which the backfill needs. Must be ubuntu: as of
+    // 2026-07-06 WhatsApp 428-rejects macOS/windows Desktop fingerprints combined
+    // with syncFullHistory from this IP (verified by config sweep), ubuntu passes.
+    browser: Browsers.ubuntu('Desktop'),
     markOnlineOnConnect: false,
     syncFullHistory: true, // pull chat history on link so the backfill can recover missed replies
     // Answer decryption-retry requests so recipients never get stuck on
